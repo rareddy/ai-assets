@@ -1,0 +1,47 @@
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+.Python
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+
+# uv
+.uv/
+uv.lock
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Playwright
+playwright-report/
+test-results/
+
+# Google OAuth tokens (stored outside repo)
+# google_credentials.json is in ~/.status-report/ — not in repo

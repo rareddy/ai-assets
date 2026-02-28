@@ -1,0 +1,128 @@
+"""Configuration: Pydantic BaseSettings and ReportPeriod parsing."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Optional
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings
+
+
+@dataclass
+class ReportPeriod:
+    """Time window for a report run."""
+
+    label: Optional[str]
+    start: datetime  # UTC, inclusive
+    end: datetime  # UTC, inclusive
+
+    def __post_init__(self) -> None:
+        if self.start > self.end:
+            raise ValueError(f"period start {self.start} must be <= end {self.end}")
+
+
+def parse_period(value: str) -> ReportPeriod:
+    """Parse a period string into a ReportPeriod with UTC datetimes.
+
+    Supported formats:
+      - "today"             → 00:00:00 UTC today to now()
+      - "yesterday"         → full previous calendar day UTC
+      - "last-24h"          → rolling 24 hours from now()
+      - "YYYY-MM-DD"        → full calendar day UTC
+      - "YYYY-MM-DD:YYYY-MM-DD" → inclusive date range UTC
+
+    Raises ValueError for future dates or unrecognised formats.
+    """
+    now = datetime.now(UTC)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if value == "today":
+        period = ReportPeriod(label="today", start=today, end=now)
+
+    elif value == "yesterday":
+        start = today - timedelta(days=1)
+        end = start.replace(hour=23, minute=59, second=59, microsecond=999999)
+        period = ReportPeriod(label="yesterday", start=start, end=end)
+
+    elif value == "last-24h":
+        period = ReportPeriod(label="last-24h", start=now - timedelta(hours=24), end=now)
+
+    elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        try:
+            date = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=UTC)
+        except ValueError as exc:
+            raise ValueError(f"Invalid date '{value}': {exc}") from exc
+        start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        period = ReportPeriod(label=None, start=start, end=end)
+
+    elif re.fullmatch(r"\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}", value):
+        start_str, end_str = value.split(":")
+        try:
+            start_date = datetime.strptime(start_str, "%Y-%m-%d").replace(tzinfo=UTC)
+            end_date = datetime.strptime(end_str, "%Y-%m-%d").replace(tzinfo=UTC)
+        except ValueError as exc:
+            raise ValueError(f"Invalid date range '{value}': {exc}") from exc
+        start = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        period = ReportPeriod(label=None, start=start, end=end)
+
+    else:
+        raise ValueError(
+            f"Unrecognised period format: '{value}'. "
+            "Use: today, yesterday, last-24h, YYYY-MM-DD, or YYYY-MM-DD:YYYY-MM-DD"
+        )
+
+    # FR-014: reject future end dates
+    if period.end > now:
+        # Allow "today" — its end is now(), which equals now
+        if value not in ("today", "last-24h"):
+            raise ValueError(
+                "ERROR: --period references a future date. "
+                "Reports can only be generated for past or current periods."
+            )
+
+    return period
+
+
+class Config(BaseSettings):
+    """Application configuration loaded from environment variables."""
+
+    # Anthropic
+    anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
+
+    # LangFuse
+    langfuse_public_key: str = Field(..., alias="LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: str = Field(..., alias="LANGFUSE_SECRET_KEY")
+    langfuse_host: str = Field("https://cloud.langfuse.com", alias="LANGFUSE_HOST")
+
+    # Jira (optional)
+    jira_base_url: Optional[str] = Field(None, alias="JIRA_BASE_URL")
+    jira_user_email: Optional[str] = Field(None, alias="JIRA_USER_EMAIL")
+    jira_api_token: Optional[str] = Field(None, alias="JIRA_API_TOKEN")
+
+    # Slack (optional)
+    slack_bot_token: Optional[str] = Field(None, alias="SLACK_BOT_TOKEN")
+
+    # GitHub (optional)
+    github_token: Optional[str] = Field(None, alias="GITHUB_TOKEN")
+
+    # Google (optional — shared across Calendar, Drive, Gmail)
+    google_client_id: Optional[str] = Field(None, alias="GOOGLE_CLIENT_ID")
+    google_client_secret: Optional[str] = Field(None, alias="GOOGLE_CLIENT_SECRET")
+    google_project_id: Optional[str] = Field(None, alias="GOOGLE_PROJECT_ID")
+
+    # Skill fetch cap
+    skill_fetch_limit: int = Field(100, alias="SKILL_FETCH_LIMIT")
+
+    @field_validator("skill_fetch_limit")
+    @classmethod
+    def validate_fetch_limit(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("SKILL_FETCH_LIMIT must be >= 1")
+        return v
+
+    model_config = {"populate_by_name": True, "extra": "ignore"}
