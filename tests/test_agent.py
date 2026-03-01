@@ -77,7 +77,7 @@ class TestRunAgentHappyPath:
              patch("status_report.agent.RunLogger") as mock_logger_cls:
             client = MagicMock()
             client.messages.create.return_value = fake_response
-            mock_anthropic_mod.Anthropic.return_value = client
+            mock_anthropic_mod.AnthropicVertex.return_value = client
             mock_logger_cls.return_value.log_run = MagicMock()
 
             report = await run_agent(
@@ -121,7 +121,7 @@ class TestRunAgentHappyPath:
              patch("status_report.agent.RunLogger"):
             client = MagicMock()
             client.messages.create.return_value = fake_response
-            mock_anthropic_mod.Anthropic.return_value = client
+            mock_anthropic_mod.AnthropicVertex.return_value = client
 
             await run_agent(
                 config=config,
@@ -146,7 +146,7 @@ class TestRunAgentHappyPath:
              patch("status_report.agent.RunLogger"):
             client = MagicMock()
             client.messages.create.return_value = fake_response
-            mock_mod.Anthropic.return_value = client
+            mock_mod.AnthropicVertex.return_value = client
 
             report = await run_agent(
                 config=config,
@@ -175,7 +175,7 @@ class TestRunAgentHappyPath:
              patch("status_report.agent.RunLogger") as mock_logger_cls:
             client = MagicMock()
             client.messages.create.return_value = fake_response
-            mock_mod.Anthropic.return_value = client
+            mock_mod.AnthropicVertex.return_value = client
 
             logger_instance = MagicMock()
             logger_instance.log_run.side_effect = lambda t: logged_traces.append(t)
@@ -226,7 +226,7 @@ class TestRunAgentAggregation:
              patch("status_report.agent.RunLogger"):
             client = MagicMock()
             client.messages.create.side_effect = capture_create
-            mock_mod.Anthropic.return_value = client
+            mock_mod.AnthropicVertex.return_value = client
 
             await run_agent(
                 config=config,
@@ -269,7 +269,7 @@ class TestRunAgentFailureHandling:
              patch("asyncio.sleep", new=AsyncMock()):
             client = MagicMock()
             client.messages.create.return_value = fake_response
-            mock_mod.Anthropic.return_value = client
+            mock_mod.AnthropicVertex.return_value = client
 
             report = await run_agent(
                 config=config,
@@ -314,7 +314,7 @@ class TestRunAgentFailureHandling:
              patch("asyncio.sleep", new=AsyncMock()):
             client = MagicMock()
             client.messages.create.return_value = fake_response
-            mock_mod.Anthropic.return_value = client
+            mock_mod.AnthropicVertex.return_value = client
 
             report = await run_agent(
                 config=config,
@@ -468,7 +468,7 @@ class TestRunAgentSourceFiltering:
              patch("status_report.agent.RunLogger"):
             client = MagicMock()
             client.messages.create.return_value = fake_response
-            mock_mod.Anthropic.return_value = client
+            mock_mod.AnthropicVertex.return_value = client
 
             await run_agent(
                 config=config,
@@ -500,7 +500,7 @@ class TestRunAgentSourceFiltering:
              patch("status_report.agent.RunLogger"):
             client = MagicMock()
             client.messages.create.return_value = fake_response
-            mock_mod.Anthropic.return_value = client
+            mock_mod.AnthropicVertex.return_value = client
 
             report = await run_agent(
                 config=config,
@@ -634,7 +634,7 @@ class TestAutoperiodLabelInOutput:
              patch("status_report.agent.RunHistoryStore"):
             client = MagicMock()
             client.messages.create.return_value = fake_response
-            mock_mod.Anthropic.return_value = client
+            mock_mod.AnthropicVertex.return_value = client
 
             report = await run_agent(
                 config=config,

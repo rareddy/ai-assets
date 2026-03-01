@@ -25,7 +25,7 @@ from status_report.config import Config, ReportPeriod, parse_period
 from status_report.report import SkippedSource, format_report
 from status_report.run_history import RunHistoryStore
 from status_report.skills import get_enabled_skills
-from status_report.tracing import TracingClient, configure_structlog
+from status_report.tracing import configure_structlog
 
 logger = structlog.get_logger(__name__)
 
@@ -162,8 +162,6 @@ def main() -> None:
     # ── Run agent ──────────────────────────────────────────────────────────────
     from status_report.agent import run_agent
 
-    tracing_client = TracingClient(config)
-
     # Convert unconfigured-but-requested skill names to pre-populated SkippedSource entries
     pre_skipped = [
         SkippedSource(source=name, reason="not_configured", attempts=0)
@@ -178,7 +176,6 @@ def main() -> None:
                 period=period,
                 enabled_skills=enabled_skills,
                 output_format=args.output_format,
-                tracing_client=tracing_client,
                 pre_skipped=pre_skipped,
             )
         )

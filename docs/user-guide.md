@@ -7,19 +7,20 @@ This guide covers all features of the Status Report Agent in depth. For a quick 
 ## Table of Contents
 
 1. [Installation & Setup](#installation--setup)
-2. [Configuration Reference](#configuration-reference)
-3. [CLI Reference](#cli-reference)
-4. [Period Formats](#period-formats)
-5. [Auto-Period (Run History)](#auto-period-run-history)
-6. [Output Formats](#output-formats)
-7. [Exit Codes](#exit-codes)
-8. [Data Sources](#data-sources)
-9. [Multi-User Setup](#multi-user-setup)
-10. [Docker Usage](#docker-usage)
-11. [Adding Custom Skills](#adding-custom-skills)
-12. [Observability & Tracing](#observability--tracing)
-13. [Troubleshooting](#troubleshooting)
-14. [Security & Privacy](#security--privacy)
+2. [Vertex AI Setup](#vertex-ai-setup)
+3. [Configuration Reference](#configuration-reference)
+4. [CLI Reference](#cli-reference)
+5. [Period Formats](#period-formats)
+6. [Auto-Period (Run History)](#auto-period-run-history)
+7. [Output Formats](#output-formats)
+8. [Exit Codes](#exit-codes)
+9. [Data Sources & Credential Setup](#data-sources--credential-setup)
+10. [Multi-User Setup](#multi-user-setup)
+11. [Docker Usage](#docker-usage)
+12. [Adding Custom Skills](#adding-custom-skills)
+13. [Audit Logging](#audit-logging)
+14. [Troubleshooting](#troubleshooting)
+15. [Security & Privacy](#security--privacy)
 
 ---
 
@@ -38,9 +39,12 @@ This guide covers all features of the Status Report Agent in depth. For a quick 
 git clone <repo-url> status-report
 cd status-report
 
+# Authenticate with Google Cloud (one-time per machine)
+gcloud auth application-default login
+
 # Copy the env template and fill in your credentials
 cp .env.example .env
-# Edit .env with your values
+# Edit .env — at minimum set VERTEX_PROJECT_ID
 
 # Install dependencies
 uv sync
@@ -61,23 +65,78 @@ All tests use mocked I/O — no live API credentials required.
 
 ---
 
+---
+
+## Vertex AI Setup
+
+Claude is accessed via your own Google Cloud Vertex AI deployment — no Anthropic API key is required. Authentication uses [Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/application-default-credentials), which are handled automatically by the Google auth libraries.
+
+### Step 1 — Enable Vertex AI in your GCP project
+
+```bash
+gcloud services enable aiplatform.googleapis.com --project YOUR_PROJECT_ID
+```
+
+### Step 2 — Request access to Claude models
+
+Open the [Vertex AI Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) in your project, find the Claude model you want (e.g. Claude 3.5 Sonnet), and click **Enable**. Access is typically approved within minutes.
+
+Available Claude models on Vertex AI (check Model Garden for current list):
+
+| Model | Vertex AI model ID |
+|-------|--------------------|
+| Claude 3.5 Sonnet v2 | `claude-3-5-sonnet-v2@20241022` |
+| Claude 3.5 Haiku | `claude-3-5-haiku@20241022` |
+| Claude 3 Opus | `claude-3-opus@20240229` |
+
+### Step 3 — Grant IAM permissions
+
+Your user account or service account needs the **Vertex AI User** role:
+
+```bash
+# For a user account
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="user:you@example.com" \
+  --role="roles/aiplatform.user"
+
+# For a service account (GKE / Cloud Run)
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:SA_NAME@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
+```
+
+### Step 4 — Authenticate locally
+
+```bash
+# One-time per machine — opens browser for Google sign-in
+gcloud auth application-default login
+```
+
+In GKE or Cloud Run no extra auth is needed — the pod/container's service account is used automatically.
+
+### Step 5 — Configure `.env`
+
+```env
+VERTEX_PROJECT_ID=your-gcp-project-id
+VERTEX_REGION=us-east5
+CLAUDE_MODEL=claude-3-5-sonnet-v2@20241022
+```
+
+Available regions for Claude on Vertex AI: `us-east5`, `europe-west1`, `us-central1`.
+
+---
+
 ## Configuration Reference
 
 All configuration is supplied via a `.env` file (or exported environment variables). The file is git-ignored.
 
-### Anthropic (Required)
-
-| Variable | Format | Description |
-|----------|--------|-------------|
-| `ANTHROPIC_API_KEY` | `sk-ant-...` | Anthropic API key for Claude synthesis |
-
-### LangFuse (Required)
+### Vertex AI (Required)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LANGFUSE_PUBLIC_KEY` | — | LangFuse public key |
-| `LANGFUSE_SECRET_KEY` | — | LangFuse secret key |
-| `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Override for self-hosted LangFuse |
+| `VERTEX_PROJECT_ID` | — | GCP project ID where Claude is deployed |
+| `VERTEX_REGION` | `us-east5` | Vertex AI region |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model name as listed in Vertex AI Model Garden |
 
 ### Jira (Optional)
 
@@ -391,46 +450,158 @@ esac
 
 ---
 
-## Data Sources
+## Data Sources & Credential Setup
 
-### Jira
+At least one data source must be configured. The agent skips unconfigured sources without failing.
 
-- **Auth**: API token via Basic Auth (email:token)
-- **Data collected**: Issues updated, created, or transitioned; comments authored; worklogs
-- **Scope**: Read-only (`read:jira-work`, `read:jira-user`)
-- **Get an API token**: [Atlassian API tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+---
+
+### Jira Cloud
+
+**What it collects**: Issues you updated, created, or transitioned; comments you authored; worklogs — all within the report period.
+
+**Credentials needed**: `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`
+
+#### How to create a Jira API token
+
+1. Go to [Atlassian account security settings](https://id.atlassian.com/manage-profile/security/api-tokens)
+2. Click **Create API token**
+3. Give it a label (e.g. "status-report")
+4. Copy the token — it is only shown once
+
+```env
+JIRA_BASE_URL=https://yourorg.atlassian.net
+JIRA_USER_EMAIL=you@yourorg.com
+JIRA_API_TOKEN=ATATTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+**Required API scopes**: `read:jira-work`, `read:jira-user` (read-only)
+
+---
 
 ### Slack
 
-- **Auth**: Bot token or user token (`xoxb-...`)
-- **Data collected**: Messages sent, threads replied to, reactions given
-- **Required scopes**: `search:read`, `channels:history`, `channels:read`, `users:read`
+**What it collects**: Messages you sent, threads you replied to, reactions you gave — within the report period.
+
+**Credentials needed**: `SLACK_BOT_TOKEN`
+
+#### How to create a Slack app and bot token
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App → From scratch**
+2. Name it (e.g. "Status Report") and pick your workspace
+3. Go to **OAuth & Permissions** → **Bot Token Scopes** and add:
+   - `search:read`
+   - `channels:history`
+   - `channels:read`
+   - `users:read`
+4. Click **Install to Workspace** and authorise
+5. Copy the **Bot User OAuth Token** (`xoxb-...`)
+
+```env
+SLACK_BOT_TOKEN=xoxb-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+> **Tip**: If you only want to search your own messages, a **User Token** (`xoxp-...`) with the same scopes also works and may show more history.
+
+---
 
 ### GitHub
 
-- **Auth**: Personal Access Token
-- **Data collected**: PRs opened, reviewed, merged; commits pushed; code review comments
-- **Required scopes**: `repo:read`, `read:org`
-- **Get a token**: GitHub Settings → Developer settings → Personal access tokens
+**What it collects**: Pull requests you opened, reviewed, or merged; commits you pushed; code review comments — within the report period.
 
-### Google Calendar
+**Credentials needed**: `GITHUB_TOKEN`
 
-- **Auth**: OAuth 2.0 (shared with Drive and Gmail)
-- **Data collected**: Meetings attended — title, time, duration, attendee count only
-- **Privacy**: Meeting notes, attachments, and event descriptions are never fetched
-- **Scope**: `https://www.googleapis.com/auth/calendar.readonly`
+#### How to create a GitHub Personal Access Token
 
-### Google Drive
+**Fine-grained PAT (recommended)**:
 
-- **Auth**: OAuth 2.0 (shared)
-- **Data collected**: Documents created, modified, or viewed
-- **Scopes**: `drive.metadata.readonly`, `drive.activity.readonly`
+1. Go to GitHub → Settings → Developer settings → [Personal access tokens → Fine-grained tokens](https://github.com/settings/tokens?type=beta)
+2. Click **Generate new token**
+3. Set expiry and select the repositories you want to include
+4. Under **Permissions**, grant:
+   - **Contents**: Read-only
+   - **Pull requests**: Read-only
+   - **Metadata**: Read-only (auto-selected)
+5. Copy the token (`github_pat_...`)
 
-### Gmail
+**Classic PAT (simpler, works across all your repos)**:
 
-- **Auth**: OAuth 2.0 (shared)
-- **Data collected**: Sent emails, replies, emails with action items — subject and metadata only, never body content
-- **Scope**: Read-only Gmail scopes
+1. Go to GitHub → Settings → Developer settings → [Personal access tokens → Tokens (classic)](https://github.com/settings/tokens)
+2. Click **Generate new token (classic)**
+3. Select scopes: `repo` (read access), `read:org`
+4. Copy the token (`ghp_...`)
+
+```env
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+---
+
+### Google Calendar, Drive, and Gmail
+
+All three Google sources share a single OAuth 2.0 client. You set it up once and run the consent flow once.
+
+**What each source collects**:
+- **Calendar**: Meetings you attended — title, time, attendee count only (no notes or descriptions)
+- **Drive**: Documents you created, modified, or viewed
+- **Gmail**: Emails you sent, replied to, or that contained action items — subject and metadata only, never body content
+
+**Credentials needed**: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_PROJECT_ID`
+
+#### Step 1 — Create a Google Cloud project (or use an existing one)
+
+You can use the same project as your Vertex AI deployment.
+
+```bash
+gcloud projects create my-status-report --name="Status Report"
+# or use an existing project
+export PROJECT_ID=your-existing-project
+```
+
+#### Step 2 — Enable the required APIs
+
+```bash
+gcloud services enable \
+  calendar-json.googleapis.com \
+  drive.googleapis.com \
+  gmail.googleapis.com \
+  --project $PROJECT_ID
+```
+
+#### Step 3 — Create an OAuth 2.0 client
+
+1. Open [Google Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials)
+2. Click **Create Credentials → OAuth client ID**
+3. If prompted, configure the OAuth consent screen first:
+   - User type: **Internal** (for a company Google Workspace) or **External** (personal account)
+   - App name, support email, developer email — fill these in
+   - Add scopes: `calendar.readonly`, `drive.metadata.readonly`, `drive.activity.readonly`, and Gmail read scope
+4. Application type: **Desktop app**
+5. Name it (e.g. "Status Report CLI")
+6. Download the JSON file — it contains `client_id` and `client_secret`
+
+```env
+GOOGLE_CLIENT_ID=123456789-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+GOOGLE_PROJECT_ID=your-gcp-project-id
+```
+
+#### Step 4 — Run the OAuth consent flow (one-time)
+
+```bash
+uv run python -m status_report.auth.google --consent
+```
+
+This opens a browser. Sign in with the Google account whose Calendar, Drive, and Gmail you want to query. After authorising, refresh tokens are saved to `~/.status-report/google_credentials.json` (permissions 600). The token auto-refreshes — you will not need to repeat this unless it is revoked.
+
+**Required OAuth scopes** (read-only):
+
+| Source | Scope |
+|--------|-------|
+| Calendar | `https://www.googleapis.com/auth/calendar.readonly` |
+| Drive | `https://www.googleapis.com/auth/drive.metadata.readonly` |
+| Drive activity | `https://www.googleapis.com/auth/drive.activity.readonly` |
+| Gmail | `https://www.googleapis.com/auth/gmail.readonly` |
 
 ---
 
@@ -582,20 +753,7 @@ Sensitive field names are blocked in `metadata` (enforced by Pydantic): `token`,
 
 ---
 
-## Observability & Tracing
-
-### LangFuse
-
-Every run creates a top-level LangFuse trace with:
-- User identifier and period label
-- Output format
-- One child span per skill
-- One child span for Claude synthesis (model, token usage, latency)
-- Final outcome and duration
-
-Traces are visible at your LangFuse dashboard ([cloud.langfuse.com](https://cloud.langfuse.com) or self-hosted).
-
-Credentials and raw activity data are never included in spans.
+## Audit Logging
 
 ### Audit Log
 
@@ -627,6 +785,25 @@ LOG_LEVEL=DEBUG python -m status_report.main --user alice@example.com
 ---
 
 ## Troubleshooting
+
+### Claude / Vertex AI errors
+
+**`VERTEX_PROJECT_ID` missing**
+Set `VERTEX_PROJECT_ID` in `.env` to your GCP project ID.
+
+**`google.auth.exceptions.DefaultCredentialsError`**
+Run `gcloud auth application-default login` to create local credentials. In GKE/Cloud Run, ensure the pod has a service account with the Vertex AI User role.
+
+**`403 Permission denied` on Vertex AI**
+Your account or service account does not have the `roles/aiplatform.user` role, or Claude model access has not been enabled in Model Garden for your project/region.
+
+**`404 Model not found`**
+Check that the model name in `CLAUDE_MODEL` is available in your region. List enabled models:
+```bash
+gcloud ai models list --region=$VERTEX_REGION --project=$VERTEX_PROJECT_ID
+```
+
+---
 
 ### "No skills are configured"
 
@@ -695,7 +872,7 @@ python -m status_report.main --user alice@example.com --period 2026-02-28
 Exit code 2. All skills either failed or returned zero activity items.
 
 - Check `~/.status-report/runs.log` for the last run's `counts` and `skipped` fields.
-- Check LangFuse trace for per-skill span details.
+- Run with `LOG_LEVEL=DEBUG` to see per-skill fetch details in stderr.
 
 ---
 

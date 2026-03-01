@@ -16,12 +16,8 @@ from status_report.report import Report, ReportSection, SkippedSource, format_re
 from status_report.run_history import RunHistoryStore
 from status_report.run_log import RunLogger, RunTrace, SkippedSourceEntry
 from status_report.skills.base import ActivityItem, ActivitySkill, SkillFetchResult, fetch_with_retry
-from status_report.tracing import TracingClient
 
 logger = structlog.get_logger(__name__)
-
-# Claude model to use for synthesis
-_CLAUDE_MODEL = "claude-sonnet-4-6"
 
 _SYSTEM_PROMPT = """You are a professional status report writer. You will receive a structured list
 of workplace activity items collected from various tools (Jira, GitHub, Slack, Google Calendar,
@@ -111,7 +107,6 @@ async def run_agent(
     period: ReportPeriod,
     enabled_skills: list[ActivitySkill],
     output_format: Literal["text", "markdown", "json"],
-    tracing_client: TracingClient | None = None,
     pre_skipped: list[SkippedSource] | None = None,
 ) -> Report:
     """Orchestrate skill fetching and Claude synthesis for one agent run.
@@ -122,17 +117,12 @@ async def run_agent(
         period: Report time window.
         enabled_skills: Pre-filtered list of ready skills.
         output_format: Desired output format.
-        tracing_client: Optional LangFuse tracing client.
+        pre_skipped: Sources already known to be unavailable (not configured).
 
     Returns:
         Report with synthesised content and skipped_sources populated.
     """
     run_start = time.monotonic()
-    trace = tracing_client.create_trace(
-        user=user,
-        period_label=period.label or str(period.start.date()),
-        output_format=output_format,
-    ) if tracing_client else None
 
     skill_results: dict[str, list[ActivityItem]] = {}
     skipped: list[SkippedSource] = list(pre_skipped) if pre_skipped else []
@@ -172,7 +162,7 @@ async def run_agent(
             all_items.extend(result.items)
             skill_results[name] = result.items
 
-    # ── Synthesise with Claude (exactly once) ─────────────────────────────────
+    # ── Synthesise with Claude via Vertex AI (exactly once) ───────────────────
     if not all_items:
         logger.warning("No activity items retrieved from any skill.")
         report = Report(
@@ -192,9 +182,12 @@ async def run_agent(
         )
 
         logger.info("Calling Claude for synthesis (%d total items)...", len(all_items))
-        client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        client = anthropic.AnthropicVertex(
+            project_id=config.vertex_project_id,
+            region=config.vertex_region,
+        )
         response = client.messages.create(
-            model=_CLAUDE_MODEL,
+            model=config.claude_model,
             max_tokens=2048,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],

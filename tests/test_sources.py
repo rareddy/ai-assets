@@ -79,9 +79,8 @@ class TestGetEnabledSkills:
         from status_report.skills import discover_skills, get_enabled_skills
 
         # Remove GitHub token so GitHubSkill.is_configured() returns False
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
-        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+        monkeypatch.setenv("VERTEX_PROJECT_ID", "test-gcp-project")
+        monkeypatch.setenv("VERTEX_REGION", "us-east5")
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
         config_no_github = Config()
@@ -95,9 +94,8 @@ class TestGetEnabledSkills:
         """When requesting two sources, one configured and one not → correct split."""
         from status_report.skills import discover_skills, get_enabled_skills
 
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
-        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+        monkeypatch.setenv("VERTEX_PROJECT_ID", "test-gcp-project")
+        monkeypatch.setenv("VERTEX_REGION", "us-east5")
         monkeypatch.setenv("GITHUB_TOKEN", "ghp_test")
         monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
 
@@ -117,9 +115,8 @@ class TestGetEnabledSkills:
         """When requested_sources=None, not_configured is always [] (no specific request)."""
         from status_report.skills import discover_skills, get_enabled_skills
 
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
-        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+        monkeypatch.setenv("VERTEX_PROJECT_ID", "test-gcp-project")
+        monkeypatch.setenv("VERTEX_REGION", "us-east5")
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
         config_partial = Config()

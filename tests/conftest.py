@@ -22,10 +22,9 @@ from status_report.skills.base import ActivityItem
 def mock_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """Set all required environment variables for Config instantiation."""
     env = {
-        "ANTHROPIC_API_KEY": "sk-ant-test",
-        "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
-        "LANGFUSE_SECRET_KEY": "sk-lf-test",
-        "LANGFUSE_HOST": "https://cloud.langfuse.com",
+        "VERTEX_PROJECT_ID": "test-gcp-project",
+        "VERTEX_REGION": "us-east5",
+        "CLAUDE_MODEL": "claude-sonnet-4-6",
         "JIRA_BASE_URL": "https://test.atlassian.net",
         "JIRA_USER_EMAIL": "alice@example.com",
         "JIRA_API_TOKEN": "jira-token",
@@ -51,9 +50,6 @@ def config(mock_env: dict[str, str]) -> Config:
 def minimal_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Environment with only required fields (no skill credentials)."""
     for key in [
-        "ANTHROPIC_API_KEY",
-        "LANGFUSE_PUBLIC_KEY",
-        "LANGFUSE_SECRET_KEY",
         "JIRA_BASE_URL",
         "JIRA_USER_EMAIL",
         "JIRA_API_TOKEN",
@@ -64,9 +60,8 @@ def minimal_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "GOOGLE_PROJECT_ID",
     ]:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    monkeypatch.setenv("VERTEX_PROJECT_ID", "test-gcp-project")
+    monkeypatch.setenv("VERTEX_REGION", "us-east5")
 
 
 # ── Time fixtures ─────────────────────────────────────────────────────────────
@@ -129,38 +124,21 @@ def tmp_log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return log_dir
 
 
-# ── Anthropic mock ────────────────────────────────────────────────────────────
+# ── Anthropic / Vertex AI mock ────────────────────────────────────────────────
 
 
 @pytest.fixture
 def mock_anthropic():
-    """Patch the Anthropic client to return a canned Claude response."""
+    """Patch the AnthropicVertex client to return a canned Claude response."""
     fake_text = (
         "## Key Accomplishments\n- Merged PR #42\n\n## Suggested Follow-ups\n- Review JIRA-100"
     )
     fake_response = MagicMock()
     fake_response.content = [MagicMock(text=fake_text)]
 
-    with patch("status_report.agent.anthropic.Anthropic") as mock_cls:
+    with patch("status_report.agent.anthropic.AnthropicVertex") as mock_cls:
         client = MagicMock()
         client.messages.create.return_value = fake_response
-        mock_cls.return_value = client
-        yield client
-
-
-# ── LangFuse mock ─────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def mock_langfuse():
-    """Patch LangFuse so no HTTP calls are made during tests."""
-    with patch("status_report.tracing.Langfuse") as mock_cls:
-        client = MagicMock()
-        trace = MagicMock()
-        span = MagicMock()
-        trace.span.return_value = span
-        trace.generation.return_value = span
-        client.trace.return_value = trace
         mock_cls.return_value = client
         yield client
 

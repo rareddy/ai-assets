@@ -5,14 +5,17 @@ A Python-based CLI agent that generates daily or periodic status reports by aggr
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
-cp .env.example .env   # fill in your credentials
+# 1. Authenticate with Google Cloud (one-time per machine)
+gcloud auth application-default login
+
+# 2. Install dependencies
+cp .env.example .env   # set VERTEX_PROJECT_ID and any data-source credentials
 uv sync
 
-# 2. One-time Google OAuth consent (if using Calendar / Drive / Gmail)
+# 3. One-time Google OAuth consent (if using Calendar / Drive / Gmail)
 uv run python -m status_report.auth.google --consent
 
-# 3. Generate your first report
+# 4. Generate your first report
 python -m status_report.main --user you@example.com
 ```
 
@@ -53,9 +56,10 @@ All configuration is via environment variables in `.env`. The file is git-ignore
 
 | Variable | Purpose |
 |----------|---------|
-| `ANTHROPIC_API_KEY` | Claude API key (Anthropic) |
-| `LANGFUSE_PUBLIC_KEY` | LangFuse observability public key |
-| `LANGFUSE_SECRET_KEY` | LangFuse observability secret key |
+| `VERTEX_PROJECT_ID` | GCP project where Claude is deployed on Vertex AI |
+| `VERTEX_REGION` | Vertex AI region (default: `us-east5`) |
+
+Authentication uses [Google Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) — no API key needed. Run `gcloud auth application-default login` once on your machine, or attach a service account in GKE/Cloud Run.
 
 At least one data source credential is also required (otherwise exit code 2).
 
@@ -72,7 +76,7 @@ At least one data source credential is also required (otherwise exit code 2).
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Self-hosted LangFuse endpoint |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model deployed in your Vertex AI project |
 | `SKILL_FETCH_LIMIT` | `100` | Max activity items per source per run |
 
 ---
@@ -197,6 +201,17 @@ History is stored as JSONL, scoped per user, and pruned to 90 days automatically
 
 ---
 
+## Vertex AI Setup
+
+Claude runs on your own Google Cloud project via Vertex AI — no Anthropic API key needed.
+
+1. Enable the Vertex AI API in your GCP project
+2. Grant your account (or service account) the **Vertex AI User** role
+3. Request access to Claude models in your region via the [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden)
+4. Set `VERTEX_PROJECT_ID` and `VERTEX_REGION` in `.env`
+
+See [docs/user-guide.md](docs/user-guide.md#vertex-ai-setup) for the full setup walkthrough.
+
 ## Project Structure
 
 ```
@@ -223,6 +238,6 @@ src/status_report/
 ## Security
 
 - **Read-only**: No skill ever writes, modifies, or deletes data in any external system.
-- **No secrets in code or logs**: All credentials come from environment variables. LangFuse traces are scrubbed of secrets.
+- **No secrets in code or logs**: All credentials come from environment variables or Google ADC. Nothing sensitive is logged.
 - **Local token storage**: Google OAuth tokens are stored in `~/.status-report/google_credentials.json` (permissions 600).
 - **`.env` is git-ignored** — never commit it.
