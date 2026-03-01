@@ -33,6 +33,17 @@
 
 [Gates determined based on constitution file]
 
+| Gate | Status | Notes |
+|------|--------|-------|
+| I. Read-Only Data Access | | |
+| II. Async-First Skill Execution | | |
+| III. Python-Orchestrated Skill Execution | | |
+| IV. Observability-First with LangFuse | | |
+| V. Secrets & Credential Hygiene | | |
+| VI. Test-First with Mocked Skill I/O | | |
+| VII. Container-First Runtime | | |
+| VIII. Documentation-as-Code | ✅ PASS / ⚠ NEEDS UPDATE | Does this feature change CLI args, env vars, output format, or setup steps? If yes, README.md and docs/user-guide.md MUST be updated in this PR. |
+
 ## Project Structure
 
 ### Documentation (this feature)

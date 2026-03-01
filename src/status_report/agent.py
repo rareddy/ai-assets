@@ -13,6 +13,7 @@ import structlog
 
 from status_report.config import Config, ReportPeriod
 from status_report.report import Report, ReportSection, SkippedSource, format_report
+from status_report.run_history import RunHistoryStore
 from status_report.run_log import RunLogger, RunTrace, SkippedSourceEntry
 from status_report.skills.base import ActivityItem, ActivitySkill, SkillFetchResult, fetch_with_retry
 from status_report.tracing import TracingClient
@@ -233,5 +234,16 @@ async def run_agent(
         RunLogger().log_run(run_trace)
     except Exception as exc:
         logger.warning("Failed to write audit log entry: %s", exc)
+
+    if outcome in ("success", "partial"):
+        try:
+            RunHistoryStore().record_run(
+                user=user,
+                completed_at=datetime.now(UTC),
+                outcome=outcome,
+                period_label=period.label or str(period.start.date()),
+            )
+        except Exception as exc:
+            logger.warning("Failed to write run history entry", error=str(exc))
 
     return report

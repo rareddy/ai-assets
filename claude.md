@@ -296,6 +296,8 @@ GOOGLE_PROJECT_ID=
 ## Active Technologies
 - Python 3.12+ + anthropic, httpx, playwright, langfuse, tenacity, filelock, (001-status-report-agent)
 - `~/.status-report/google_credentials.json` (Google OAuth tokens), (001-status-report-agent)
+- Python 3.12+ + `filelock` (already in pyproject.toml), `structlog` (already present) (002-run-history)
+- JSONL file at `~/.status-report/run_history.log` + `.lock` sidecar (002-run-history)
 
 ## Recent Changes
 - 001-status-report-agent: Added Python 3.12+ + anthropic, httpx, playwright, langfuse, tenacity, filelock,
