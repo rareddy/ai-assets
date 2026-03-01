@@ -5,17 +5,17 @@
 A Python-based agent that generates daily/periodic status reports for an individual by
 aggregating READ-ONLY activity data from multiple workplace systems. The Python
 orchestrator runs all skills concurrently and passes the aggregated results to Claude
-once for synthesis. LangFuse provides observability and tracing.
+once for synthesis. Structured logging via structlog provides observability.
 
 ## Tech Stack
 
 - **Language**: Python 3.12+
 - **Package Manager**: uv
-- **LLM**: Claude via Anthropic Python SDK (direct SDK usage — no CLI wrapper)
+- **LLM**: Claude via Vertex AI (`anthropic[vertex]` SDK — `AnthropicVertex` client)
 - **HTTP Client**: httpx (async)
 - **Browser Automation**: Playwright (async, for skill API-fallback paths)
-- **Observability**: LangFuse (tracing, prompt management, evaluation)
-- **Authentication**: OAuth 2.0 (Google Suite), API tokens (Jira, GitHub, Slack)
+- **Observability**: structlog (JSON in containers, console in TTY)
+- **Authentication**: Google ADC for Vertex AI, OAuth 2.0 (Google Suite), API tokens (Jira, GitHub, Slack)
 - **Configuration**: Environment variables via `.env` file
 - **Runtime**: Docker container (standalone, stateless)
 
@@ -34,7 +34,7 @@ status-report/
 │       ├── main.py               # CLI entrypoint
 │       ├── agent.py              # orchestrator: runs skills concurrently, calls Claude once
 │       ├── config.py             # settings and env var loading
-│       ├── tracing.py            # LangFuse instrumentation setup
+│       ├── tracing.py            # structlog configuration
 │       ├── report.py             # report formatting and output
 │       ├── skills/               # one skill per data source
 │       │   ├── __init__.py
@@ -142,6 +142,7 @@ past the `auth/` layer.
 
 | Service | Method | Storage |
 |---------|--------|---------|
+| Vertex AI (Claude) | Google Application Default Credentials (ADC) | `gcloud auth application-default login` or service account |
 | Jira, GitHub, Slack | API token / PAT | `.env` → environment variable |
 | Google Calendar, Drive, Gmail | OAuth 2.0 refresh token | `~/.status-report/google_credentials.json` |
 
@@ -153,8 +154,7 @@ a read-only volume — never baked into the image.
 
 ```
 1. Load config → call is_configured() on each skill
-2. Initialize LangFuse trace for the session
-3. asyncio.gather(*[skill.fetch_activity(...) for skill in enabled_skills])
+2. asyncio.gather(*[skill.fetch_activity(...) for skill in enabled_skills])
         │
         ├── JiraSkill:     REST API  ──(fallback)──► Playwright
         ├── SlackSkill:    Web API   ──(fallback)──► Playwright
@@ -162,9 +162,9 @@ a read-only volume — never baked into the image.
         ├── CalendarSkill: OAuth API ──(fallback)──► Playwright
         ├── GDriveSkill:   OAuth API ──(fallback)──► Playwright
         └── GmailSkill:    OAuth API ──(fallback)──► Playwright
-4. Aggregate list[ActivityItem] from all skills into a single structured payload
-5. Call Claude once (Anthropic SDK) with the aggregated payload for synthesis
-6. Claude produces the formatted report:
+3. Aggregate list[ActivityItem] from all skills into a single structured payload
+4. Call Claude once (AnthropicVertex SDK) with the aggregated payload for synthesis
+5. Claude produces the formatted report:
    - Summary of key accomplishments
    - Tickets/issues worked on with status changes
    - Code contributions (PRs, reviews)
@@ -172,7 +172,7 @@ a read-only volume — never baked into the image.
    - Documents produced or consumed
    - Email activity (sent, replied to, key threads)
    - Suggested follow-ups or open items
-7. Output the formatted report
+6. Output the formatted report
 ```
 
 ## Claude's Role
@@ -192,17 +192,6 @@ python -m status_report.main \
   --format markdown               # text | markdown | json
 ```
 
-## LangFuse Integration
-
-- **Tracing**: Every agent run creates a top-level trace; each skill execution and
-  the Claude synthesis call are separate child spans
-- **Prompt management**: The synthesis system prompt lives in the LangFuse prompt
-  registry — not hardcoded in source files
-- **Cost tracking**: Claude API token usage tracked per report run
-- **Evaluation**: Log report quality scores if user feedback is provided
-- Use the `langfuse` Python SDK with the `@observe` decorator for automatic span
-  creation. Spans MUST NEVER include raw tokens, passwords, or OAuth credentials.
-
 ## Code Conventions
 
 - `async/await` for all I/O — `httpx.AsyncClient` for HTTP, Playwright async API
@@ -210,7 +199,7 @@ python -m status_report.main \
 - Type hints on all function signatures
 - Pydantic models for `ActivityItem`, configuration, and API response schemas
 - Each skill implements `ActivitySkill` (see Skill Model above)
-- `structlog` for application logging (separate from LangFuse tracing)
+- `structlog` for application logging
 - Tests: `pytest` + `pytest-asyncio`; mock all HTTP with `respx`, mock Playwright,
   mock Anthropic SDK; no live API calls in the test suite
 
@@ -236,13 +225,10 @@ variables or the read-only volume mount — nothing is baked into the image.
 ## Environment Variables
 
 ```
-# Anthropic
-ANTHROPIC_API_KEY=
-
-# LangFuse
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-LANGFUSE_HOST=https://cloud.langfuse.com
+# Vertex AI (Claude) — authentication via Google ADC, no API key needed
+VERTEX_PROJECT_ID=your-gcp-project-id
+VERTEX_REGION=us-east5
+CLAUDE_MODEL=claude-sonnet-4-6
 
 # Jira
 JIRA_BASE_URL=https://yourorg.atlassian.net
@@ -268,7 +254,7 @@ GOOGLE_PROJECT_ID=
   `auth/`).
 - **No secrets in code**: All credentials from environment variables or
   `~/.status-report/`. Never hardcode.
-- **No secrets in traces**: LangFuse spans must never include raw tokens, passwords,
+- **No secrets in logs**: Structured log output must never include raw tokens, passwords,
   or OAuth credentials.
 - **Minimal scopes**: Request the absolute minimum read-only permissions per platform.
 - **`.env` in `.gitignore`**: Always.
@@ -279,7 +265,7 @@ GOOGLE_PROJECT_ID=
 - If a skill's credentials are missing (`is_configured()` returns `False`), skip that
   skill, log a warning via `structlog`, and include a note in the report
 - If a skill's primary API path fails, it falls back to Playwright automatically;
-  fallback usage is logged at `warning` level and recorded as a LangFuse span attribute
+  fallback usage is logged at `warning` level
 - If all access methods are exhausted, the skill returns a structured error; the
   orchestrator includes a note in the report and continues
 - Surface rate-limit errors with retry-after guidance; never swallow silently
@@ -294,10 +280,10 @@ GOOGLE_PROJECT_ID=
 - Confluence/Notion as additional sources
 
 ## Active Technologies
-- Python 3.12+ + anthropic, httpx, playwright, langfuse, tenacity, filelock, (001-status-report-agent)
-- `~/.status-report/google_credentials.json` (Google OAuth tokens), (001-status-report-agent)
-- Python 3.12+ + `filelock` (already in pyproject.toml), `structlog` (already present) (002-run-history)
-- JSONL file at `~/.status-report/run_history.log` + `.lock` sidecar (002-run-history)
+- Python 3.12+ + anthropic[vertex], httpx, playwright, tenacity, filelock, structlog, pydantic
+- Claude via Vertex AI (`AnthropicVertex` client, Google ADC authentication)
+- `~/.status-report/google_credentials.json` (Google OAuth tokens for Calendar/Drive/Gmail)
+- JSONL file at `~/.status-report/run_history.log` + `.lock` sidecar
 
 ## Recent Changes
-- 001-status-report-agent: Added Python 3.12+ + anthropic, httpx, playwright, langfuse, tenacity, filelock,
+- Migrated from Anthropic API + LangFuse to Vertex AI (AnthropicVertex client, ADC auth, removed langfuse dependency)
