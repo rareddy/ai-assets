@@ -60,6 +60,9 @@ def _format_text(report: Report) -> str:
         "=" * 60,
         "",
     ]
+    if report.period.label:
+        lines.insert(2, f"Period : {report.period.label}")
+        lines.insert(3, "")
 
     for section in report.sections:
         lines.append(section.heading.upper())
@@ -84,6 +87,9 @@ def _format_markdown(report: Report) -> str:
         f"# Status Report — {report.user} — {date_str}",
         "",
     ]
+    if report.period.label:
+        lines.insert(2, f"**Period**: {report.period.label}")
+        lines.insert(3, "")
 
     for section in report.sections:
         lines.append(f"## {section.heading}")

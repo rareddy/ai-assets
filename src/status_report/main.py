@@ -17,11 +17,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from datetime import UTC, datetime
 
 import structlog
 
-from status_report.config import Config, parse_period
+from status_report.config import Config, ReportPeriod, parse_period
 from status_report.report import SkippedSource, format_report
+from status_report.run_history import RunHistoryStore
 from status_report.skills import get_enabled_skills
 from status_report.tracing import TracingClient, configure_structlog
 
@@ -68,8 +70,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--period",
-        required=True,
-        help="Time range: today | yesterday | last-24h | YYYY-MM-DD | YYYY-MM-DD:YYYY-MM-DD",
+        required=False,
+        default=None,
+        help=(
+            "Time range: today | yesterday | last-24h | YYYY-MM-DD | YYYY-MM-DD:YYYY-MM-DD. "
+            "If omitted, auto-computed from run history."
+        ),
     )
     parser.add_argument(
         "--sources",
@@ -92,12 +98,28 @@ def main() -> None:
         print("ERROR: --user must be a non-empty string.", file=sys.stderr)
         sys.exit(3)
 
-    # ── Validate --period ──────────────────────────────────────────────────────
-    try:
-        period = parse_period(args.period)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        sys.exit(3)
+    # ── Resolve --period ───────────────────────────────────────────────────────
+    if args.period is not None:
+        try:
+            period = parse_period(args.period)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(3)
+    else:
+        now = datetime.now(UTC)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        result = RunHistoryStore().get_last_successful_run(args.user)
+        if result:
+            last_ts, _ = result
+            period = ReportPeriod(
+                label=f"since last run at {last_ts.strftime('%Y-%m-%dT%H:%M:%SZ')}",
+                start=last_ts,
+                end=now,
+            )
+            logger.info("Period auto-computed from run history", last_run=str(last_ts))
+        else:
+            period = ReportPeriod(label="today (first run)", start=today_start, end=now)
+            logger.info("No run history found — defaulting to today (first run)")
 
     # ── Load config ────────────────────────────────────────────────────────────
     try:
@@ -132,7 +154,7 @@ def main() -> None:
     logger.info(
         "Starting report generation",
         user=args.user,
-        period=args.period,
+        period=period.label,
         skills=[s.__class__.__name__ for s in enabled_skills],
         format=args.output_format,
     )

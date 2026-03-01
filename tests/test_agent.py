@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from status_report.config import Config, ReportPeriod
+from status_report.report import Report, ReportSection, format_report
 from status_report.run_log import RunTrace
 from status_report.skills.base import ActivityItem, ActivitySkill, SkillPermanentError
 from tests.conftest import make_activity_item
@@ -547,3 +548,100 @@ class TestRunAgentSourceFiltering:
         skipped_sources = {s.source for s in report.skipped_sources}
         assert "slack" in skipped_sources      # from pre_skipped
         assert len(report.skipped_sources) == 2  # slack + the failing skill
+
+
+# ── Helpers shared with TestAutoperiodLabelInOutput ───────────────────────────
+
+_PERIOD_START = datetime(2026, 2, 27, 9, 0, 0, tzinfo=UTC)
+_PERIOD_END = datetime(2026, 2, 28, 9, 0, 0, tzinfo=UTC)
+
+
+def _make_report_with_label(label: str, fmt: str = "text") -> Report:
+    period = ReportPeriod(label=label, start=_PERIOD_START, end=_PERIOD_END)
+    return Report(
+        period=period,
+        user="alice@example.com",
+        format=fmt,
+        sections=[ReportSection(heading="Key Accomplishments", content="- Merged PR #42")],
+        skipped_sources=[],
+        generated_at=datetime(2026, 2, 28, 9, 0, 0, tzinfo=UTC),
+    )
+
+
+class TestAutoperiodLabelInOutput:
+    """Verify auto-computed period labels flow through format_report() unchanged."""
+
+    _LAST_RUN_LABEL = "since last run at 2026-02-27T09:00:00Z"
+    _FIRST_RUN_LABEL = "today (first run)"
+
+    def test_since_last_run_label_in_text_format(self) -> None:
+        report = _make_report_with_label(self._LAST_RUN_LABEL, fmt="text")
+        output = format_report(report)
+        assert "since last run" in output
+        assert "2026-02-27T09:00:00Z" in output
+
+    def test_since_last_run_label_in_markdown_format(self) -> None:
+        report = _make_report_with_label(self._LAST_RUN_LABEL, fmt="markdown")
+        output = format_report(report)
+        assert "since last run" in output
+
+    def test_since_last_run_label_in_json_format(self) -> None:
+        import json as _json
+
+        report = _make_report_with_label(self._LAST_RUN_LABEL, fmt="json")
+        output = format_report(report)
+        data = _json.loads(output)
+        assert data["period"]["label"] == self._LAST_RUN_LABEL
+
+    def test_first_run_label_in_text_format(self) -> None:
+        report = _make_report_with_label(self._FIRST_RUN_LABEL, fmt="text")
+        output = format_report(report)
+        assert "today (first run)" in output
+
+    def test_first_run_label_in_markdown_format(self) -> None:
+        report = _make_report_with_label(self._FIRST_RUN_LABEL, fmt="markdown")
+        output = format_report(report)
+        assert "today (first run)" in output
+
+    def test_first_run_label_in_json_format(self) -> None:
+        import json as _json
+
+        report = _make_report_with_label(self._FIRST_RUN_LABEL, fmt="json")
+        output = format_report(report)
+        data = _json.loads(output)
+        assert data["period"]["label"] == self._FIRST_RUN_LABEL
+
+    @pytest.mark.asyncio
+    async def test_run_agent_period_label_propagates_to_report(
+        self, config: Config
+    ) -> None:
+        """When run_agent receives an auto-computed period, report.period.label is preserved."""
+        from status_report.agent import run_agent
+
+        auto_period = ReportPeriod(
+            label=self._LAST_RUN_LABEL,
+            start=_PERIOD_START,
+            end=_PERIOD_END,
+        )
+        good_items = [make_activity_item(source="github", title="PR #1")]
+        skills = [_StubSkill(good_items, "githubstub2")]
+
+        fake_response = MagicMock()
+        fake_response.content = [MagicMock(text="## Key Accomplishments\n- PR #1")]
+
+        with patch("status_report.agent.anthropic") as mock_mod, \
+             patch("status_report.agent.RunLogger"), \
+             patch("status_report.agent.RunHistoryStore"):
+            client = MagicMock()
+            client.messages.create.return_value = fake_response
+            mock_mod.Anthropic.return_value = client
+
+            report = await run_agent(
+                config=config,
+                user="alice@example.com",
+                period=auto_period,
+                enabled_skills=skills,
+                output_format="text",
+            )
+
+        assert report.period.label == self._LAST_RUN_LABEL
