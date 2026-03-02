@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from filelock import FileLock
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,9 @@ class SkippedSourceEntry(BaseModel):
 
 
 class RunTrace(BaseModel):
-    """Audit record for one agent execution (written to JSONL log and LangFuse)."""
+    """Audit record for one agent execution (written to JSONL log)."""
 
-    schema_version: str = "1.0"
+    schema_version: str = "2.0"
     timestamp: str  # ISO 8601 UTC
     user: str
     period: str  # label or date range string
@@ -53,6 +53,11 @@ class RunTrace(BaseModel):
     skipped: list[SkippedSourceEntry]
     retries: dict[str, int]
     duration_seconds: float
+    # MCP agentic fields (v2.0)
+    agent_turns: int = 0
+    tool_calls_count: int = 0
+    total_tokens: int = 0
+    mcp_servers_started: list[str] = Field(default_factory=list)
 
     @field_validator("timestamp")
     @classmethod

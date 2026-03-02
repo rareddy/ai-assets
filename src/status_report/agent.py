@@ -1,61 +1,75 @@
-"""Agent orchestrator: runs skills concurrently, calls Claude once for synthesis."""
+"""Agent loop: Claude drives data collection via MCP tools, then synthesizes a report."""
 
 from __future__ import annotations
 
-import asyncio
-import json
 import time
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 import anthropic
 import structlog
 
 from status_report.config import Config, ReportPeriod
+from status_report.mcp.executor import ToolExecutor
+from status_report.mcp.registry import ToolRegistry
 from status_report.report import Report, ReportSection, SkippedSource, format_report
 from status_report.run_history import RunHistoryStore
 from status_report.run_log import RunLogger, RunTrace, SkippedSourceEntry
-from status_report.skills.base import ActivityItem, ActivitySkill, SkillFetchResult, fetch_with_retry
 
 logger = structlog.get_logger(__name__)
 
-_SYSTEM_PROMPT = """You are a professional status report writer. You will receive a structured list
-of workplace activity items collected from various tools (Jira, GitHub, Slack, Google Calendar,
-Google Drive, Gmail). Synthesise them into a clear, professional status report.
+_SYSTEM_PROMPT = """You are an autonomous status report agent. You have access to MCP tools connected to
+workplace systems (GitHub, Jira, Slack, Google Calendar, Google Drive, Gmail). Your job
+is to investigate the user's recent activity and write a detailed, professional status
+report.
 
-Organise the report into these sections (include a section ONLY if there is relevant data):
-1. Key Accomplishments
-2. Tickets & Issues
-3. Code Contributions
-4. Meetings & Collaboration
-5. Documents
-6. Email Activity
-7. Suggested Follow-ups
+## Your Process
 
-Rules:
-- Write in first person (e.g. "I merged PR #42...")
+1. **Discover**: Search across all available tools for the user's activity in the
+   requested time period. Start broad — search for recent PRs, tickets updated,
+   messages sent, meetings attended, documents modified, and emails sent/replied.
+
+2. **Investigate**: For the most significant items (merged PRs, completed tickets,
+   important meetings), drill deeper. Read PR diffs, ticket descriptions and comments,
+   thread context. Understand WHAT was actually done, not just that something happened.
+
+3. **Report**: Write a rich, detailed report. Don't just list titles — describe the
+   actual work, the context, and the significance.
+
+## Report Sections (include only sections with data)
+
+1. **Key Accomplishments** — Most impactful work completed
+2. **Tickets & Issues** — Status changes, progress, blockers
+3. **Code Contributions** — PRs, code reviews, commits with context
+4. **Meetings & Collaboration** — Meetings attended, key discussions
+5. **Documents** — Docs created, reviewed, or significantly modified
+6. **Email Activity** — Important threads, responses (subject and action type only — no body content)
+7. **Suggested Follow-ups** — Open items, pending reviews, upcoming deadlines
+
+## Rules
+
+- Write in first person ("I merged PR #42...")
 - Be concise and professional — suitable for a team standup or weekly update
-- Do NOT invent information not present in the activity items
-- Do NOT include raw credentials, tokens, or personal email body content
-- Each section should be a brief bulleted list or short paragraph
-- If a section has no data, omit it entirely"""
+- Do NOT invent information not present in tool results
+- Do NOT include raw credentials, tokens, or email body content
+- Each section should be bulleted or short paragraphs
+- If a section has no data, omit it entirely
+- When you have enough information to write a comprehensive report, stop calling tools
+  and write the report directly
+"""
 
 
-def _serialise_items(items: list[ActivityItem]) -> str:
-    """Convert ActivityItems to a compact JSON string for the Claude prompt."""
-    return json.dumps(
-        [
-            {
-                "source": item.source,
-                "action_type": item.action_type,
-                "title": item.title,
-                "timestamp": item.timestamp.isoformat(),
-                "url": item.url,
-                "metadata": item.metadata,
-            }
-            for item in items
-        ],
-        indent=2,
+def _build_user_message(user: str, period: ReportPeriod, available_sources: list[str]) -> str:
+    """Build the initial user message for the agent loop."""
+    period_label = period.label or f"{period.start.date()} to {period.end.date()}"
+    sources_str = ", ".join(available_sources) if available_sources else "all configured"
+
+    return (
+        f"Generate a status report for user '{user}' covering the period: {period_label}.\n\n"
+        f"Available data sources: {sources_str}\n"
+        f"Time range: {period.start.isoformat()} to {period.end.isoformat()}\n\n"
+        f"Search for my activity across all available tools, investigate the most "
+        f"significant items in depth, and write a detailed status report."
     )
 
 
@@ -68,7 +82,6 @@ def _parse_claude_response(text: str, period: ReportPeriod, user: str, output_fo
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("## ") or stripped.startswith("# "):
-            # Save previous section
             if current_heading and current_lines:
                 sections.append(
                     ReportSection(
@@ -81,7 +94,6 @@ def _parse_claude_response(text: str, period: ReportPeriod, user: str, output_fo
         elif stripped:
             current_lines.append(line)
 
-    # Save last section
     if current_heading and current_lines:
         sections.append(
             ReportSection(
@@ -105,67 +117,38 @@ async def run_agent(
     config: Config,
     user: str,
     period: ReportPeriod,
-    enabled_skills: list[ActivitySkill],
+    registry: ToolRegistry,
+    executor: ToolExecutor,
     output_format: Literal["text", "markdown", "json"],
     pre_skipped: list[SkippedSource] | None = None,
+    mcp_servers_started: list[str] | None = None,
 ) -> Report:
-    """Orchestrate skill fetching and Claude synthesis for one agent run.
+    """Run the Claude agent loop with MCP tools.
+
+    Claude decides what to investigate, calls tools, receives results, and
+    iterates until it has enough context to write the report.
 
     Args:
         config: Application config.
         user: Target user identifier.
         period: Report time window.
-        enabled_skills: Pre-filtered list of ready skills.
+        registry: Tool registry with allowlisted tools.
+        executor: Tool executor for dispatching tool calls.
         output_format: Desired output format.
-        pre_skipped: Sources already known to be unavailable (not configured).
+        pre_skipped: Sources already known to be unavailable.
+        mcp_servers_started: Names of MCP servers that started successfully.
 
     Returns:
-        Report with synthesised content and skipped_sources populated.
+        Report with synthesized content and skipped_sources populated.
     """
     run_start = time.monotonic()
-
-    skill_results: dict[str, list[ActivityItem]] = {}
     skipped: list[SkippedSource] = list(pre_skipped) if pre_skipped else []
-    retries: dict[str, int] = {}
+    available_sources = registry.get_source_labels()
 
-    # ── Fetch from all skills concurrently ────────────────────────────────────
-    async def _run_skill(skill: ActivitySkill) -> tuple[str, SkillFetchResult]:
-        name = skill.__class__.__name__.lower().replace("skill", "")
-        logger.info("[%s] Fetching activity for %s (%s → %s)", name, user, period.start.date(), period.end.date())
-        result = await fetch_with_retry(skill, user, period.start, period.end)
-        if result.failure_reason is None:
-            logger.info("[%s] Retrieved %d item(s)", name, len(result.items))
-        else:
-            logger.warning("[%s] Failed: %s (retries: %d)", name, result.failure_reason, result.retry_count)
-        return name, result
-
-    skill_names = [s.__class__.__name__.lower().replace("skill", "") for s in enabled_skills]
-    results = await asyncio.gather(*[_run_skill(skill) for skill in enabled_skills])
-
-    all_items: list[ActivityItem] = []
-    counts: dict[str, int] = {}
-
-    for name, result in results:
-        counts[name] = len(result.items)
-        if result.failure_reason is not None:
-            # Actual failure (bad credentials, transient retries exhausted, etc.)
-            skipped.append(
-                SkippedSource(
-                    source=name,
-                    reason=result.failure_reason,
-                    attempts=result.retry_count + 1,
-                )
-            )
-            retries[name] = result.retry_count
-        else:
-            # Success — even if items=[] (no activity today, not a failure)
-            all_items.extend(result.items)
-            skill_results[name] = result.items
-
-    # ── Synthesise with Claude via Vertex AI (exactly once) ───────────────────
-    if not all_items:
-        logger.warning("No activity items retrieved from any skill.")
-        report = Report(
+    tools = registry.get_anthropic_tools()
+    if not tools:
+        logger.warning("No MCP tools available — producing empty report.")
+        return Report(
             period=period,
             user=user,
             format=output_format,
@@ -174,33 +157,144 @@ async def run_agent(
             generated_at=datetime.now(UTC),
             raw_text="",
         )
-    else:
-        period_label = period.label or f"{period.start.date()}:{period.end.date()}"
-        user_message = (
-            f"Generate a status report for user '{user}' covering {period_label}.\n\n"
-            f"Activity data ({len(all_items)} items):\n{_serialise_items(all_items)}"
-        )
 
-        logger.info("Calling Claude for synthesis (%d total items)...", len(all_items))
-        client = anthropic.AnthropicVertex(
-            project_id=config.vertex_project_id,
-            region=config.vertex_region,
-        )
+    # ── Build initial messages ─────────────────────────────────────────────
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": _build_user_message(user, period, available_sources)},
+    ]
+
+    # ── Agent loop ─────────────────────────────────────────────────────────
+    client = anthropic.AnthropicVertex(
+        project_id=config.vertex_project_id,
+        region=config.vertex_region,
+    )
+
+    agent_turns = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    max_turns = config.max_agent_turns
+
+    logger.info(
+        "agent_loop_starting",
+        user=user,
+        period=period.label,
+        tool_count=len(tools),
+        max_turns=max_turns,
+    )
+
+    while agent_turns < max_turns:
+        agent_turns += 1
+
+        logger.info("agent_loop_turn", turn=agent_turns, message_count=len(messages))
+
         response = client.messages.create(
             model=config.claude_model,
-            max_tokens=2048,
+            max_tokens=4096,
             system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+            messages=messages,
+            tools=tools,
         )
 
-        report_text = response.content[0].text
+        total_input_tokens += response.usage.input_tokens
+        total_output_tokens += response.usage.output_tokens
+
+        # ── Handle end_turn: Claude is done ────────────────────────────────
+        if response.stop_reason == "end_turn":
+            logger.info(
+                "agent_loop_complete",
+                turns=agent_turns,
+                total_tool_calls=executor.call_count,
+            )
+            # Extract final text
+            report_text = ""
+            for block in response.content:
+                if hasattr(block, "text"):
+                    report_text += block.text
+
+            report = _parse_claude_response(report_text, period, user, output_format)
+            report.skipped_sources = skipped
+            break
+
+        # ── Handle tool_use: dispatch tool calls ───────────────────────────
+        if response.stop_reason == "tool_use":
+            # Add Claude's response (with tool_use blocks) to messages
+            messages.append({"role": "assistant", "content": response.content})
+
+            # Process each tool call
+            tool_results: list[dict[str, Any]] = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    logger.info(
+                        "tool_call",
+                        tool=block.name,
+                        turn=agent_turns,
+                    )
+                    try:
+                        result_text = await executor.execute(block.name, block.input)
+                    except ValueError as exc:
+                        result_text = str(exc)
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    })
+
+            messages.append({"role": "user", "content": tool_results})
+            continue
+
+        # ── Unexpected stop reason ─────────────────────────────────────────
+        logger.warning(
+            "agent_loop_unexpected_stop",
+            stop_reason=response.stop_reason,
+            turn=agent_turns,
+        )
+        report_text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                report_text += block.text
+
+        report = _parse_claude_response(report_text, period, user, output_format)
+        report.skipped_sources = skipped
+        break
+
+    else:
+        # Turn limit reached
+        logger.warning(
+            "agent_loop_turn_limit_reached",
+            max_turns=max_turns,
+            tool_calls=executor.call_count,
+        )
+
+        # Ask Claude to produce its best report with data collected so far
+        messages.append({
+            "role": "user",
+            "content": (
+                "You have reached the investigation limit. Please write the best "
+                "status report you can with the information you have gathered so far."
+            ),
+        })
+        response = client.messages.create(
+            model=config.claude_model,
+            max_tokens=4096,
+            system=_SYSTEM_PROMPT,
+            messages=messages,
+        )
+        total_input_tokens += response.usage.input_tokens
+        total_output_tokens += response.usage.output_tokens
+
+        report_text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                report_text += block.text
+
         report = _parse_claude_response(report_text, period, user, output_format)
         report.skipped_sources = skipped
 
-    # ── Write RunTrace audit log ───────────────────────────────────────────────
+    # ── Write RunTrace audit log ───────────────────────────────────────────
     duration = time.monotonic() - run_start
 
-    if skipped and not all_items:
+    if skipped and not report.sections:
         outcome = "failed"
     elif skipped:
         outcome = "partial"
@@ -212,15 +306,19 @@ async def run_agent(
         user=user,
         period=period.label or str(period.start.date()),
         format=output_format,
-        sources_attempted=skill_names,
-        counts=counts,
+        sources_attempted=available_sources,
+        counts={},
         outcome=outcome,
         skipped=[
             SkippedSourceEntry(source=s.source, reason=s.reason, attempts=s.attempts)
             for s in skipped
         ],
-        retries=retries,
+        retries={},
         duration_seconds=round(duration, 3),
+        agent_turns=agent_turns,
+        tool_calls_count=executor.call_count,
+        total_tokens=total_input_tokens + total_output_tokens,
+        mcp_servers_started=mcp_servers_started or [],
     )
 
     try:

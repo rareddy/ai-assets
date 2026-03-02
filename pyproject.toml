@@ -4,17 +4,14 @@ version = "0.1.0"
 description = "AI-powered daily status report agent aggregating workplace activity"
 requires-python = ">=3.12"
 dependencies = [
-    "anthropic>=0.40.0",
-    "httpx>=0.27.0",
-    "playwright>=1.48.0",
+    "anthropic[vertex]>=0.40.0",
+    "mcp>=1.0.0",
     "tenacity>=9.0.0",
     "filelock>=3.16.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
     "structlog>=24.4.0",
-    "google-api-python-client>=2.150.0",
     "google-auth-oauthlib>=1.2.0",
-    "google-auth-httplib2>=0.2.0",
 ]
 
 [project.scripts]
@@ -31,7 +28,6 @@ packages = ["src/status_report"]
 dev-dependencies = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
-    "respx>=0.21.0",
     "pytest-cov>=6.0.0",
 ]
 

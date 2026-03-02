@@ -7,7 +7,7 @@ Usage:
 
 Exit codes:
     0 — success (all configured sources returned data)
-    1 — partial success (report generated; ≥1 source skipped)
+    1 — partial success (report generated; >=1 source skipped)
     2 — complete failure (no data; all sources failed or none configured)
     3 — invalid arguments (bad --period, unknown format, future date, etc.)
 """
@@ -16,20 +16,24 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from datetime import UTC, datetime
 
 import structlog
 
 from status_report.config import Config, ReportPeriod, parse_period
+from status_report.mcp.config import build_mcp_configs, filter_configs_by_sources
+from status_report.mcp.executor import ToolExecutor
+from status_report.mcp.manager import MCPManager
+from status_report.mcp.registry import ToolRegistry
 from status_report.report import SkippedSource, format_report
 from status_report.run_history import RunHistoryStore
-from status_report.skills import get_enabled_skills
 from status_report.tracing import configure_structlog
 
 logger = structlog.get_logger(__name__)
 
-_VALID_SOURCES = ("jira", "slack", "github", "calendar", "gdrive", "gmail")
+_VALID_SOURCES = ("jira", "slack", "github", "google", "browser")
 _VALID_FORMATS = ("text", "markdown", "json")
 
 
@@ -37,26 +41,105 @@ def _configure_logging(level: str = "WARNING") -> None:
     configure_structlog(log_level=level)
 
 
-def _parse_sources(sources_str: str) -> list[str]:
-    """Parse and validate --sources argument; warn about unknown names."""
-    requested = [s.strip().lower() for s in sources_str.split(",") if s.strip()]
-    valid: list[str] = []
-    for name in requested:
-        if name not in _VALID_SOURCES and name not in __import__(
-            "status_report.skills.base", fromlist=["ActivitySkill"]
-        ).ActivitySkill._registry:
+async def _run_with_mcp(
+    config: Config,
+    user: str,
+    period: ReportPeriod,
+    output_format: str,
+    requested_sources: list[str] | None,
+) -> int:
+    """Start MCP servers, run agent loop, return exit code."""
+    from status_report.agent import run_agent
+
+    # Build MCP server configs from environment
+    env = dict(os.environ)
+    all_configs = build_mcp_configs(env)
+
+    # Filter to requested sources
+    configs, not_available = filter_configs_by_sources(all_configs, requested_sources)
+
+    pre_skipped = [
+        SkippedSource(source=name, reason="not_configured", attempts=0)
+        for name in not_available
+    ]
+
+    if not configs:
+        print(
+            "ERROR: No MCP servers can be configured. "
+            "Set at least one of: GITHUB_TOKEN, JIRA_API_TOKEN, SLACK_BOT_TOKEN, GOOGLE_CLIENT_ID.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Start MCP servers
+    manager = MCPManager(configs)
+    try:
+        handles = await manager.start_all()
+
+        if not handles:
             print(
-                f'WARNING: Unknown source "{name}" — skipping. '
-                f"Valid sources: {', '.join(_VALID_SOURCES)}.",
+                "ERROR: All MCP servers failed to start. Check credentials and connectivity.",
                 file=sys.stderr,
             )
+            return 2
+
+        mcp_servers_started = [h.config.name for h in handles]
+        logger.info(
+            "mcp_servers_ready",
+            servers=mcp_servers_started,
+            total=len(handles),
+        )
+
+        # Build tool registry and executor
+        registry = ToolRegistry()
+        registry.register_all(handles)
+        executor = ToolExecutor(registry)
+
+        tools = registry.get_anthropic_tools()
+        if not tools:
+            print(
+                "ERROR: No read-only tools available from MCP servers.",
+                file=sys.stderr,
+            )
+            return 2
+
+        logger.info(
+            "Starting report generation",
+            user=user,
+            period=period.label,
+            tool_count=len(tools),
+            format=output_format,
+        )
+
+        # Run agent loop
+        report = await run_agent(
+            config=config,
+            user=user,
+            period=period,
+            registry=registry,
+            executor=executor,
+            output_format=output_format,
+            pre_skipped=pre_skipped,
+            mcp_servers_started=mcp_servers_started,
+        )
+
+        # Write report to stdout
+        print(format_report(report))
+
+        # Determine exit code
+        if not report.sections and not report.raw_text:
+            return 2
+        elif report.skipped_sources:
+            return 1
         else:
-            valid.append(name)
-    return valid
+            return 0
+
+    finally:
+        await manager.shutdown()
 
 
 def main() -> None:
-    """CLI entry point — parses args, runs agent, writes report to stdout."""
+    """CLI entry point — parses args, starts MCP servers, runs agent."""
     _configure_logging()
 
     parser = argparse.ArgumentParser(
@@ -93,12 +176,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # ── Validate --user ────────────────────────────────────────────────────────
+    # ── Validate --user ────────────────────────────────────────────────────
     if not args.user.strip():
         print("ERROR: --user must be a non-empty string.", file=sys.stderr)
         sys.exit(3)
 
-    # ── Resolve --period ───────────────────────────────────────────────────────
+    # ── Resolve --period ───────────────────────────────────────────────────
     if args.period is not None:
         try:
             period = parse_period(args.period)
@@ -121,62 +204,34 @@ def main() -> None:
             period = ReportPeriod(label="today (first run)", start=today_start, end=now)
             logger.info("No run history found — defaulting to today (first run)")
 
-    # ── Load config ────────────────────────────────────────────────────────────
+    # ── Load config ────────────────────────────────────────────────────────
     try:
         config = Config()
     except Exception as exc:
         print(f"ERROR: Configuration error: {exc}", file=sys.stderr)
         sys.exit(3)
 
-    # ── Resolve --sources ──────────────────────────────────────────────────────
+    # ── Parse --sources ────────────────────────────────────────────────────
     requested_sources: list[str] | None = None
     if args.sources:
-        requested_sources = _parse_sources(args.sources)
+        requested_sources = [s.strip().lower() for s in args.sources.split(",") if s.strip()]
         if not requested_sources:
             print(
-                "ERROR: No valid sources specified after filtering. "
+                "ERROR: No valid sources specified. "
                 f"Valid sources: {', '.join(_VALID_SOURCES)}.",
                 file=sys.stderr,
             )
             sys.exit(3)
 
-    # ── Discover and filter skills ─────────────────────────────────────────────
-    enabled_skills, not_configured = get_enabled_skills(config, requested_sources)
-
-    if not enabled_skills:
-        print(
-            "ERROR: No skills are configured. "
-            "Set at least one of: JIRA_API_TOKEN, SLACK_BOT_TOKEN, GITHUB_TOKEN, GOOGLE_CLIENT_ID.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    logger.info(
-        "Starting report generation",
-        user=args.user,
-        period=period.label,
-        skills=[s.__class__.__name__ for s in enabled_skills],
-        format=args.output_format,
-    )
-
-    # ── Run agent ──────────────────────────────────────────────────────────────
-    from status_report.agent import run_agent
-
-    # Convert unconfigured-but-requested skill names to pre-populated SkippedSource entries
-    pre_skipped = [
-        SkippedSource(source=name, reason="not_configured", attempts=0)
-        for name in not_configured
-    ]
-
+    # ── Run agent with MCP servers ─────────────────────────────────────────
     try:
-        report = asyncio.run(
-            run_agent(
+        exit_code = asyncio.run(
+            _run_with_mcp(
                 config=config,
                 user=args.user,
                 period=period,
-                enabled_skills=enabled_skills,
                 output_format=args.output_format,
-                pre_skipped=pre_skipped,
+                requested_sources=requested_sources,
             )
         )
     except KeyboardInterrupt:
@@ -187,16 +242,7 @@ def main() -> None:
         logger.exception("Agent run failed", exc=exc)
         sys.exit(2)
 
-    # ── Write report to stdout ─────────────────────────────────────────────────
-    print(format_report(report))
-
-    # ── Determine exit code ────────────────────────────────────────────────────
-    if not report.sections and not report.raw_text:
-        sys.exit(2)
-    elif report.skipped_sources:
-        sys.exit(1)
-    else:
-        sys.exit(0)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

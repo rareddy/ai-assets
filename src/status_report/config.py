@@ -112,14 +112,14 @@ class Config(BaseSettings):
     google_client_secret: Optional[str] = Field(None, alias="GOOGLE_CLIENT_SECRET")
     google_project_id: Optional[str] = Field(None, alias="GOOGLE_PROJECT_ID")
 
-    # Skill fetch cap
-    skill_fetch_limit: int = Field(100, alias="SKILL_FETCH_LIMIT")
+    # Agent limits
+    max_agent_turns: int = Field(50, alias="MAX_AGENT_TURNS")
 
-    @field_validator("skill_fetch_limit")
+    @field_validator("max_agent_turns")
     @classmethod
-    def validate_fetch_limit(cls, v: int) -> int:
+    def validate_max_turns(cls, v: int) -> int:
         if v < 1:
-            raise ValueError("SKILL_FETCH_LIMIT must be >= 1")
+            raise ValueError("MAX_AGENT_TURNS must be >= 1")
         return v
 
     model_config = {"populate_by_name": True, "extra": "ignore"}
