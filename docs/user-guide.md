@@ -14,10 +14,10 @@ This guide covers all features of the Status Report Agent in depth. For a quick 
 6. [Auto-Period (Run History)](#auto-period-run-history)
 7. [Output Formats](#output-formats)
 8. [Exit Codes](#exit-codes)
-9. [Data Sources & Credential Setup](#data-sources--credential-setup)
+9. [Data Sources & MCP Servers](#data-sources--mcp-servers)
 10. [Multi-User Setup](#multi-user-setup)
 11. [Docker Usage](#docker-usage)
-12. [Adding Custom Skills](#adding-custom-skills)
+12. [Adding New Data Sources](#adding-new-data-sources)
 13. [Audit Logging](#audit-logging)
 14. [Troubleshooting](#troubleshooting)
 15. [Security & Privacy](#security--privacy)
@@ -30,6 +30,7 @@ This guide covers all features of the Status Report Agent in depth. For a quick 
 
 - Python 3.12+
 - [`uv`](https://docs.astral.sh/uv/) package manager
+- Node.js 20+ (for MCP servers — installed automatically in Docker)
 - API credentials for at least one data source
 - (Optional) Google account for Calendar, Drive, and Gmail access
 
@@ -61,9 +62,7 @@ The Google OAuth consent opens a browser window. After authorising, refresh toke
 uv run pytest --tb=short -q
 ```
 
-All tests use mocked I/O — no live API credentials required.
-
----
+All tests use mocked MCP sessions and Claude responses — no live API credentials or MCP servers required.
 
 ---
 
@@ -79,15 +78,7 @@ gcloud services enable aiplatform.googleapis.com --project YOUR_PROJECT_ID
 
 ### Step 2 — Request access to Claude models
 
-Open the [Vertex AI Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) in your project, find the Claude model you want (e.g. Claude 3.5 Sonnet), and click **Enable**. Access is typically approved within minutes.
-
-Available Claude models on Vertex AI (check Model Garden for current list):
-
-| Model | Vertex AI model ID |
-|-------|--------------------|
-| Claude 3.5 Sonnet v2 | `claude-3-5-sonnet-v2@20241022` |
-| Claude 3.5 Haiku | `claude-3-5-haiku@20241022` |
-| Claude 3 Opus | `claude-3-opus@20240229` |
+Open the [Vertex AI Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) in your project, find the Claude model you want, and click **Enable**.
 
 ### Step 3 — Grant IAM permissions
 
@@ -119,7 +110,7 @@ In GKE or Cloud Run no extra auth is needed — the pod/container's service acco
 ```env
 VERTEX_PROJECT_ID=your-gcp-project-id
 VERTEX_REGION=us-east5
-CLAUDE_MODEL=claude-3-5-sonnet-v2@20241022
+CLAUDE_MODEL=claude-sonnet-4-6
 ```
 
 Available regions for Claude on Vertex AI: `us-east5`, `europe-west1`, `us-central1`.
@@ -138,39 +129,20 @@ All configuration is supplied via a `.env` file (or exported environment variabl
 | `VERTEX_REGION` | `us-east5` | Vertex AI region |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model name as listed in Vertex AI Model Garden |
 
-### Jira (Optional)
+### Data Source Credentials
 
-| Variable | Description |
-|----------|-------------|
-| `JIRA_BASE_URL` | Your Jira Cloud instance, e.g. `https://yourorg.atlassian.net` |
-| `JIRA_USER_EMAIL` | Email address for Jira API auth |
-| `JIRA_API_TOKEN` | Jira Cloud API token ([create one here](https://id.atlassian.com/manage-profile/security/api-tokens)) |
+| Variable(s) | Source | MCP Server |
+|-------------|--------|-----------|
+| `GITHUB_TOKEN` | GitHub | `@modelcontextprotocol/server-github` |
+| `JIRA_BASE_URL` + `JIRA_USER_EMAIL` + `JIRA_API_TOKEN` | Jira Cloud | `@sooperset/mcp-atlassian` |
+| `SLACK_BOT_TOKEN` | Slack | `@modelcontextprotocol/server-slack` |
+| `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` + `GOOGLE_PROJECT_ID` | Calendar, Drive, Gmail | `@anthropic/google-workspace-mcp` |
 
-### Slack (Optional)
-
-| Variable | Description |
-|----------|-------------|
-| `SLACK_BOT_TOKEN` | Bot or user token (`xoxb-...`). Requires scopes: `search:read`, `channels:history`, `channels:read`, `users:read` |
-
-### GitHub (Optional)
-
-| Variable | Description |
-|----------|-------------|
-| `GITHUB_TOKEN` | Personal Access Token (classic or fine-grained). Required scopes: `repo:read`, `read:org` |
-
-### Google (Optional — shared by Calendar, Drive, Gmail)
-
-| Variable | Description |
-|----------|-------------|
-| `GOOGLE_CLIENT_ID` | OAuth 2.0 client ID from Google Cloud Console |
-| `GOOGLE_CLIENT_SECRET` | OAuth 2.0 client secret |
-| `GOOGLE_PROJECT_ID` | Google Cloud project ID |
-
-### Behaviour Tuning (Optional)
+### Agent Tuning (Optional)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SKILL_FETCH_LIMIT` | `100` | Max ActivityItems returned per source per run. Oldest items are dropped when exceeded. |
+| `MAX_AGENT_TURNS` | `50` | Max agent loop iterations (Claude tool_use cycles) per report. When reached, Claude is asked to write its best report with data collected so far. |
 
 ---
 
@@ -192,16 +164,20 @@ status-report --user <email> [OPTIONS]
 |----------|----------|---------|-------------|
 | `--user USER` | Yes | — | Target user identifier (email or username). Must be a non-empty string. |
 | `--period PERIOD` | No | Auto from run history | Time range for the report. See [Period Formats](#period-formats). |
-| `--sources SOURCES` | No | All configured | Comma-separated list of source names to include. Unknown names are warned and skipped. |
+| `--sources SOURCES` | No | All configured | Comma-separated list of source labels to include. |
 | `--format FORMAT` | No | `text` | Output format. One of: `text`, `markdown`, `json`. |
 
-### Source Names
+### Source Labels
 
-Built-in source names for `--sources`:
+Source labels for `--sources`:
 
-`jira`, `slack`, `github`, `calendar`, `gdrive`, `gmail`
-
-Custom skills are also available by their module name. Unknown names are printed as warnings but do not cause a non-zero exit on their own.
+| Label | MCP Server |
+|-------|-----------|
+| `github` | GitHub MCP server |
+| `jira` | Jira Atlassian MCP server |
+| `slack` | Slack MCP server |
+| `google` | Google Workspace MCP server (Calendar, Drive, Gmail) |
+| `browser` | Playwright browser fallback |
 
 ### Common Invocations
 
@@ -260,62 +236,12 @@ When you omit `--period`, the agent computes the period automatically from the r
 
 Explicit `--period` always takes precedence — it completely skips the history lookup.
 
-### Typical Daily Workflow
-
-```bash
-# Monday morning
-python -m status_report.main --user alice@example.com
-# Period: "today (first run)"
-# → covers everything from 00:00 UTC today to now
-
-# Tuesday morning
-python -m status_report.main --user alice@example.com
-# Period: "since last run at 2026-02-28T09:00:00Z"
-# → covers Monday morning to Tuesday morning exactly, no overlap, no gap
-```
-
-### Run History File
-
-Location: `~/.status-report/run_history.log`
-
-Format: JSONL (one JSON object per line)
-
-```json
-{"schema_version": "1", "user": "alice@example.com", "completed_at": "2026-02-28T09:00:00.000000Z", "period_label": "today (first run)", "outcome": "success"}
-{"schema_version": "1", "user": "alice@example.com", "completed_at": "2026-03-01T09:00:00.000000Z", "period_label": "since last run at 2026-02-28T09:00:00Z", "outcome": "success"}
-```
-
 ### Rules for History Recording
 
 - **Recorded when**: outcome is `success` or `partial` (at least one source returned data)
 - **Not recorded when**: all sources failed (outcome `failed`, exit code 2)
 - **Retention**: Entries older than 90 days are automatically pruned on every write
 - **Concurrent access**: File writes are protected with a file lock — safe for parallel invocations
-- **Directory**: `~/.status-report/` is created automatically on first run
-
-### History Resilience
-
-| Situation | Behaviour |
-|-----------|-----------|
-| History file missing | Falls back to "today (first run)" |
-| Malformed JSON line | Line skipped with warning; next valid entry used |
-| Entry with future timestamp | Entry skipped with warning; next valid entry used |
-| All entries are `failed` outcome | Falls back to "today (first run)" |
-
-The agent never crashes due to a corrupted or missing history file.
-
-### Inspecting Run History
-
-```bash
-# All runs
-cat ~/.status-report/run_history.log
-
-# Last 5 runs, formatted
-tail -n 5 ~/.status-report/run_history.log | python -m json.tool
-
-# Check for partial or failed runs
-grep '"outcome": "partial"\|"outcome": "failed"' ~/.status-report/run_history.log
-```
 
 ---
 
@@ -340,17 +266,7 @@ CODE CONTRIBUTIONS
 ------------------
 - Opened PR #415: Add rate limiting middleware
 - Reviewed PR #410: Update dependency versions (approved)
-
-MEETINGS & COLLABORATION
-------------------------
-- Sprint planning (6 attendees, 45 min)
-- 1:1 with manager (30 min)
-
-────────────────────────────────────────────────────────────
-⚠ Skipped: gdrive (credentials_missing)
 ```
-
-Sections are only present when data exists. The skipped-sources footer only appears if ≥1 source was skipped.
 
 ### Markdown Format
 
@@ -363,19 +279,9 @@ GitHub-flavoured Markdown. Suitable for wikis, pull request descriptions, Notion
 
 ## Key Accomplishments
 - Merged PR #412 (auth-refactor) into main
-- Closed JIRA-1023 (Deploy pipeline fix)
 
 ## Code Contributions
 - Opened PR #415: Add rate limiting middleware
-- Reviewed PR #410: Update dependency versions (approved)
-
-## Meetings & Collaboration
-- Sprint planning (6 attendees, 45 min)
-- 1:1 with manager (30 min)
-
----
-
-⚠ Skipped: gdrive (credentials_missing)
 ```
 
 ### JSON Format
@@ -391,23 +297,8 @@ Machine-readable. Suitable for scripting, dashboards, or piping to `jq`.
     "end": "2026-02-28T09:31:00+00:00"
   },
   "generated_at": "2026-02-28T09:31:00+00:00",
-  "sections": [
-    {
-      "heading": "Key Accomplishments",
-      "content": "- Merged PR #412 (auth-refactor) into main\n- Closed JIRA-1023 (Deploy pipeline fix)"
-    },
-    {
-      "heading": "Code Contributions",
-      "content": "- Opened PR #415: Add rate limiting middleware\n- Reviewed PR #410: Update dependency versions (approved)"
-    }
-  ],
-  "skipped_sources": [
-    {
-      "source": "gdrive",
-      "reason": "credentials_missing",
-      "attempts": 0
-    }
-  ]
+  "sections": [...],
+  "skipped_sources": [...]
 }
 ```
 
@@ -422,7 +313,7 @@ Claude includes only sections where data exists. All possible sections:
 | Code Contributions | GitHub |
 | Meetings & Collaboration | Google Calendar |
 | Documents | Google Drive |
-| Email Activity | Gmail |
+| Email Activity | Gmail (subject and action type only — body never collected) |
 | Suggested Follow-ups | All sources (synthesised) |
 
 ---
@@ -433,175 +324,85 @@ Claude includes only sections where data exists. All possible sections:
 |------|---------|--------|
 | `0` | Success — all configured sources returned data | — |
 | `1` | Partial — report generated; ≥1 source was skipped | Check `skipped_sources` in output |
-| `2` | Failure — no data retrieved; all sources failed or none configured | Check credentials and source config |
+| `2` | Failure — no data retrieved; all MCP servers failed or none configured | Check credentials and MCP server config |
 | `3` | Invalid arguments — bad `--period`, unknown format, future date, empty `--user` | Fix the argument and retry |
 
-Exit codes enable scripting:
-
-```bash
-python -m status_report.main --user alice@example.com --format markdown > report.md
-case $? in
-  0) echo "Complete report generated" ;;
-  1) echo "Partial report — some sources skipped" ;;
-  2) echo "ERROR: No data retrieved" ;;
-  3) echo "ERROR: Invalid arguments" ;;
-esac
-```
-
 ---
 
-## Data Sources & Credential Setup
+## Data Sources & MCP Servers
 
-At least one data source must be configured. The agent skips unconfigured sources without failing.
+Each data source is accessed via an MCP (Model Context Protocol) server — an external process that exposes tools over the stdio transport. The agent starts these servers as subprocesses and Claude calls their tools directly.
 
----
+### Read-Only Safety (3-Layer Defense)
 
-### Jira Cloud
-
-**What it collects**: Issues you updated, created, or transitioned; comments you authored; worklogs — all within the report period.
-
-**Credentials needed**: `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`
-
-#### How to create a Jira API token
-
-1. Go to [Atlassian account security settings](https://id.atlassian.com/manage-profile/security/api-tokens)
-2. Click **Create API token**
-3. Give it a label (e.g. "status-report")
-4. Copy the token — it is only shown once
-
-```env
-JIRA_BASE_URL=https://yourorg.atlassian.net
-JIRA_USER_EMAIL=you@yourorg.com
-JIRA_API_TOKEN=ATATTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-**Required API scopes**: `read:jira-work`, `read:jira-user` (read-only)
-
----
-
-### Slack
-
-**What it collects**: Messages you sent, threads you replied to, reactions you gave — within the report period.
-
-**Credentials needed**: `SLACK_BOT_TOKEN`
-
-#### How to create a Slack app and bot token
-
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App → From scratch**
-2. Name it (e.g. "Status Report") and pick your workspace
-3. Go to **OAuth & Permissions** → **Bot Token Scopes** and add:
-   - `search:read`
-   - `channels:history`
-   - `channels:read`
-   - `users:read`
-4. Click **Install to Workspace** and authorise
-5. Copy the **Bot User OAuth Token** (`xoxb-...`)
-
-```env
-SLACK_BOT_TOKEN=xoxb-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-> **Tip**: If you only want to search your own messages, a **User Token** (`xoxp-...`) with the same scopes also works and may show more history.
+1. **MCP server flags**: Servers configured with read-only environment variables where supported
+2. **Tool allowlist filtering**: The registry only exposes whitelisted read-only tools to Claude
+3. **Runtime validation**: The executor validates every tool call against the allowlist before dispatch
 
 ---
 
 ### GitHub
 
-**What it collects**: Pull requests you opened, reviewed, or merged; commits you pushed; code review comments — within the report period.
+**MCP Server**: `@modelcontextprotocol/server-github`
+
+**What Claude can do**: Search repositories, read file contents, list and inspect pull requests (including diffs and reviews), list commits, search and read issues and comments.
 
 **Credentials needed**: `GITHUB_TOKEN`
 
-#### How to create a GitHub Personal Access Token
+Create a Personal Access Token at [github.com/settings/tokens](https://github.com/settings/tokens). Required scopes: `repo` (read), `read:org`.
 
-**Fine-grained PAT (recommended)**:
+---
 
-1. Go to GitHub → Settings → Developer settings → [Personal access tokens → Fine-grained tokens](https://github.com/settings/tokens?type=beta)
-2. Click **Generate new token**
-3. Set expiry and select the repositories you want to include
-4. Under **Permissions**, grant:
-   - **Contents**: Read-only
-   - **Pull requests**: Read-only
-   - **Metadata**: Read-only (auto-selected)
-5. Copy the token (`github_pat_...`)
+### Jira Cloud
 
-**Classic PAT (simpler, works across all your repos)**:
+**MCP Server**: `@sooperset/mcp-atlassian`
 
-1. Go to GitHub → Settings → Developer settings → [Personal access tokens → Tokens (classic)](https://github.com/settings/tokens)
-2. Click **Generate new token (classic)**
-3. Select scopes: `repo` (read access), `read:org`
-4. Copy the token (`ghp_...`)
+**What Claude can do**: Search issues via JQL, read issue details and comments, view transitions, read worklogs, list board issues.
 
-```env
-GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
+**Credentials needed**: `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`
+
+Create an API token at [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
+
+---
+
+### Slack
+
+**MCP Server**: `@modelcontextprotocol/server-slack`
+
+**What Claude can do**: List channels, read channel history, get thread replies, search messages, list users.
+
+**Credentials needed**: `SLACK_BOT_TOKEN`
+
+Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps). Required scopes: `search:read`, `channels:history`, `channels:read`, `users:read`.
 
 ---
 
 ### Google Calendar, Drive, and Gmail
 
+**MCP Server**: `@anthropic/google-workspace-mcp`
+
 All three Google sources share a single OAuth 2.0 client. You set it up once and run the consent flow once.
 
-**What each source collects**:
-- **Calendar**: Meetings you attended — title, time, attendee count only (no notes or descriptions)
-- **Drive**: Documents you created, modified, or viewed
-- **Gmail**: Emails you sent, replied to, or that contained action items — subject and metadata only, never body content
+**What Claude can do**:
+- **Calendar**: List and read events (title, time, attendee count — no notes or descriptions)
+- **Drive**: Search files, read file metadata
+- **Gmail**: Search messages, read message metadata (subject, sender, recipients, timestamp). **Email body content is scrubbed by the executor before reaching Claude** — this is permanent with no opt-in.
 
 **Credentials needed**: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_PROJECT_ID`
 
-#### Step 1 — Create a Google Cloud project (or use an existing one)
-
-You can use the same project as your Vertex AI deployment.
-
-```bash
-gcloud projects create my-status-report --name="Status Report"
-# or use an existing project
-export PROJECT_ID=your-existing-project
-```
-
-#### Step 2 — Enable the required APIs
-
-```bash
-gcloud services enable \
-  calendar-json.googleapis.com \
-  drive.googleapis.com \
-  gmail.googleapis.com \
-  --project $PROJECT_ID
-```
-
-#### Step 3 — Create an OAuth 2.0 client
-
-1. Open [Google Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials)
-2. Click **Create Credentials → OAuth client ID**
-3. If prompted, configure the OAuth consent screen first:
-   - User type: **Internal** (for a company Google Workspace) or **External** (personal account)
-   - App name, support email, developer email — fill these in
-   - Add scopes: `calendar.readonly`, `drive.metadata.readonly`, `drive.activity.readonly`, and Gmail read scope
-4. Application type: **Desktop app**
-5. Name it (e.g. "Status Report CLI")
-6. Download the JSON file — it contains `client_id` and `client_secret`
-
-```env
-GOOGLE_CLIENT_ID=123456789-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-GOOGLE_PROJECT_ID=your-gcp-project-id
-```
-
-#### Step 4 — Run the OAuth consent flow (one-time)
+Create OAuth credentials at the [Google Cloud Console](https://console.cloud.google.com/apis/credentials). Then run the one-time consent flow:
 
 ```bash
 uv run python -m status_report.auth.google --consent
 ```
 
-This opens a browser. Sign in with the Google account whose Calendar, Drive, and Gmail you want to query. After authorising, refresh tokens are saved to `~/.status-report/google_credentials.json` (permissions 600). The token auto-refreshes — you will not need to repeat this unless it is revoked.
+---
 
-**Required OAuth scopes** (read-only):
+### Browser Fallback
 
-| Source | Scope |
-|--------|-------|
-| Calendar | `https://www.googleapis.com/auth/calendar.readonly` |
-| Drive | `https://www.googleapis.com/auth/drive.metadata.readonly` |
-| Drive activity | `https://www.googleapis.com/auth/drive.activity.readonly` |
-| Gmail | `https://www.googleapis.com/auth/gmail.readonly` |
+**MCP Server**: `@playwright/mcp`
+
+The Playwright browser MCP server is always available as a fallback. It provides browser navigation, screenshots, and interaction tools. Claude can use it when a native MCP server is unconfigured or unavailable.
 
 ---
 
@@ -617,13 +418,11 @@ python -m status_report.main --user alice@example.com
 python -m status_report.main --user bob@example.com
 ```
 
-Each user's history is stored as separate entries (filtered by the `user` field) in the shared `~/.status-report/run_history.log` file. Access is concurrent-safe via file locking.
-
 ---
 
 ## Docker Usage
 
-The Docker image is stateless. All credentials and state are injected at runtime.
+The Docker image is stateless and includes Python, Node.js, all MCP server packages, and Playwright with Chromium.
 
 ### Build
 
@@ -646,131 +445,60 @@ The volume mount (`-v ~/.status-report:/root/.status-report`) provides:
 - Run history for auto-period (`run_history.log`)
 - Audit log (`runs.log`)
 
-Use `:ro` (read-only) if you only want the container to read history, not update it.
-
-### Common Docker Invocations
-
-```bash
-# Auto-period with read-write history
-docker run --rm \
-  --env-file .env \
-  -v ~/.status-report:/root/.status-report \
-  status-report --user alice@example.com
-
-# Explicit period, markdown output saved to host
-docker run --rm \
-  --env-file .env \
-  -v ~/.status-report:/root/.status-report:ro \
-  status-report \
-  --user alice@example.com \
-  --period yesterday \
-  --format markdown > report.md
-
-# JSON output piped through jq
-docker run --rm \
-  --env-file .env \
-  -v ~/.status-report:/root/.status-report:ro \
-  status-report \
-  --user alice@example.com \
-  --format json | jq '.sections[].heading'
-```
-
 ---
 
-## Adding Custom Skills
+## Adding New Data Sources
 
-Skills are auto-discovered Python modules in `src/status_report/skills/`. No changes to `agent.py`, `config.py`, or `main.py` are needed.
+To add a new data source, you only need to add an MCP server configuration — no changes to the agent loop, registry, executor, or output logic.
 
-### Create a Skill Module
-
-`src/status_report/skills/myservice.py`:
+In `src/status_report/mcp/config.py`, add a new entry in `build_mcp_configs()`:
 
 ```python
-from __future__ import annotations
-
-import os
-from datetime import datetime
-
-import httpx
-
-from status_report.skills.base import ActivityItem, ActivitySkill
-
-
-class MyServiceSkill(ActivitySkill):
-
-    def is_configured(self) -> bool:
-        return bool(os.getenv("MYSERVICE_API_TOKEN"))
-
-    async def fetch_activity(
-        self, user: str, start: datetime, end: datetime
-    ) -> list[ActivityItem]:
-        token = os.getenv("MYSERVICE_API_TOKEN")
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"https://api.myservice.com/activity",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"user": user, "since": start.isoformat(), "until": end.isoformat()},
-            )
-            response.raise_for_status()
-            return [
-                ActivityItem(
-                    source="myservice",
-                    action_type=item["type"],
-                    title=item["title"],
-                    timestamp=datetime.fromisoformat(item["created_at"]),
-                    url=item.get("url"),
-                    metadata={"status": item.get("status", "unknown")},
-                )
-                for item in response.json().get("items", [])
-            ]
-```
-
-### Add Credentials to `.env.example`
-
-```bash
 # MyService
-MYSERVICE_API_TOKEN=
+myservice_token = _env_or_none("MYSERVICE_TOKEN", env)
+if myservice_token:
+    configs.append(
+        MCPServerConfig(
+            name="myservice",
+            command="npx",
+            args=["-y", "@myorg/mcp-myservice"],
+            env={"MYSERVICE_TOKEN": myservice_token},
+            read_only_tools=[
+                "myservice_search",
+                "myservice_get_item",
+            ],
+            source_label="myservice",
+        )
+    )
 ```
 
-### Select in CLI
-
-```bash
-python -m status_report.main --user alice@example.com --sources myservice
-```
-
-### ActivityItem Fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `source` | `str` | Yes | Source identifier (`"jira"`, `"myservice"`, etc.) |
-| `action_type` | `str` | Yes | What happened: `"created"`, `"updated"`, `"reviewed"`, etc. |
-| `title` | `str` | Yes | Human-readable brief description |
-| `timestamp` | `datetime` | Yes | When the activity occurred (must be timezone-aware UTC) |
-| `url` | `str \| None` | No | Link to the item |
-| `metadata` | `dict[str, str]` | No | Extra key-value pairs (no sensitive field names) |
-
-Sensitive field names are blocked in `metadata` (enforced by Pydantic): `token`, `password`, `secret`, `authorization`, `credential`, `body`, `content`.
+Then add `MYSERVICE_TOKEN` to `.env.example` and the allowlist will automatically filter the tools.
 
 ---
 
 ## Audit Logging
 
-### Audit Log
+### Audit Log (RunTrace v2.0)
 
 Every run appends to `~/.status-report/runs.log` (JSONL):
 
 ```json
 {
-  "timestamp": "2026-02-28T09:31:00.000000Z",
+  "schema_version": "2.0",
+  "timestamp": "2026-03-01T09:31:00.000000Z",
   "user": "alice@example.com",
-  "period": "since last run at 2026-02-27T09:30:00Z",
+  "period": "since last run at 2026-02-28T09:30:00Z",
   "format": "text",
-  "sources_attempted": ["jira", "slack", "github"],
-  "counts": {"jira": 5, "slack": 12, "github": 3},
+  "sources_attempted": ["github", "jira"],
+  "counts": {},
   "outcome": "success",
   "skipped": [],
   "retries": {},
-  "duration_seconds": 2.847
+  "duration_seconds": 12.847,
+  "agent_turns": 5,
+  "tool_calls_count": 14,
+  "total_tokens": 8500,
+  "mcp_servers_started": ["github", "jira"]
 }
 ```
 
@@ -792,34 +520,26 @@ LOG_LEVEL=DEBUG python -m status_report.main --user alice@example.com
 Set `VERTEX_PROJECT_ID` in `.env` to your GCP project ID.
 
 **`google.auth.exceptions.DefaultCredentialsError`**
-Run `gcloud auth application-default login` to create local credentials. In GKE/Cloud Run, ensure the pod has a service account with the Vertex AI User role.
+Run `gcloud auth application-default login` to create local credentials.
 
 **`403 Permission denied` on Vertex AI**
-Your account or service account does not have the `roles/aiplatform.user` role, or Claude model access has not been enabled in Model Garden for your project/region.
+Your account does not have the `roles/aiplatform.user` role, or Claude model access has not been enabled in Model Garden.
 
-**`404 Model not found`**
-Check that the model name in `CLAUDE_MODEL` is available in your region. List enabled models:
-```bash
-gcloud ai models list --region=$VERTEX_REGION --project=$VERTEX_PROJECT_ID
-```
-
----
-
-### "No skills are configured"
+### "No MCP servers can be configured"
 
 Exit code 2. At least one data source credential must be set.
 
 **Fix**: Confirm at least one of these is in `.env`:
+- `GITHUB_TOKEN`
 - `JIRA_API_TOKEN` (+ `JIRA_USER_EMAIL` + `JIRA_BASE_URL`)
 - `SLACK_BOT_TOKEN`
-- `GITHUB_TOKEN`
-- `GOOGLE_CLIENT_ID` (+ `GOOGLE_CLIENT_SECRET` + `GOOGLE_PROJECT_ID`)
+- `GOOGLE_CLIENT_ID` (+ `GOOGLE_CLIENT_SECRET`)
 
-### Jira returns no results
+### "All MCP servers failed to start"
 
-- Verify `JIRA_USER_EMAIL` matches the email on your Atlassian account.
-- Verify `JIRA_API_TOKEN` is valid (they expire or can be revoked).
-- Confirm your Jira user has activity in the requested period.
+Exit code 2. The MCP server subprocesses could not start.
+
+**Fix**: Ensure Node.js 20+ is installed and npx is available. Run `npx -y @modelcontextprotocol/server-github` manually to test.
 
 ### Google authentication fails
 
@@ -829,50 +549,12 @@ Re-run the OAuth consent flow:
 uv run python -m status_report.auth.google --consent
 ```
 
-Then verify `~/.status-report/google_credentials.json` exists.
-
-### Docker can't read Google credentials
-
-Ensure the volume is mounted writable (not `:ro`) when running the OAuth consent step, and readable when running the agent:
-
-```bash
-docker run --rm \
-  --env-file .env \
-  -v ~/.status-report:/root/.status-report \
-  status-report \
-  --user alice@example.com
-```
-
-### "Skipped: github (transient_error_exhausted)"
-
-The GitHub API was unreachable or rate-limited after 3 retries. Check:
-- `GITHUB_TOKEN` is valid
-- You have not exceeded GitHub's rate limit (5000 req/hr for authenticated requests)
-
-```bash
-curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/rate_limit
-```
-
-### Period is wrong on second run
-
-If the auto-period is not what you expected, inspect the run history:
-
-```bash
-tail -n 5 ~/.status-report/run_history.log | python -m json.tool
-```
-
-To override, pass `--period` explicitly:
-
-```bash
-python -m status_report.main --user alice@example.com --period 2026-02-28
-```
-
 ### Report has no sections / empty output
 
-Exit code 2. All skills either failed or returned zero activity items.
+Exit code 2. Claude couldn't find activity or all tools returned errors.
 
-- Check `~/.status-report/runs.log` for the last run's `counts` and `skipped` fields.
-- Run with `LOG_LEVEL=DEBUG` to see per-skill fetch details in stderr.
+- Check `~/.status-report/runs.log` for the last run's `tool_calls_count` and `skipped` fields.
+- Run with `LOG_LEVEL=DEBUG` to see tool call details in stderr.
 
 ---
 
@@ -880,11 +562,18 @@ Exit code 2. All skills either failed or returned zero activity items.
 
 ### What the Agent Never Does
 
-- Writes, modifies, or deletes data in any external system (strictly read-only)
-- Sends raw API tokens or credentials to Claude or LangFuse
-- Fetches email body content (subjects and metadata only for Gmail)
-- Fetches meeting notes or calendar event descriptions
+- Writes, modifies, or deletes data in any external system (3-layer read-only defense)
+- Sends raw API tokens or credentials to Claude (MCP credential isolation)
+- Passes email body content to Claude (executor scrubbing, permanent, no opt-in)
 - Stores any data outside `~/.status-report/` and your `.env` file
+
+### Read-Only Safety
+
+| Layer | Mechanism |
+|-------|-----------|
+| MCP server config | Read-only flags where supported |
+| Tool allowlist | Registry filters out write tools before exposing to Claude |
+| Runtime validation | Executor validates every tool call before dispatch |
 
 ### File Permissions
 
@@ -897,10 +586,9 @@ Exit code 2. All skills either failed or returned zero activity items.
 
 ### What Claude Receives
 
-Claude receives only structured `ActivityItem` data: source name, action type, title, timestamp, URL, and non-sensitive metadata. It never receives:
+Claude receives MCP tool results — structured data from workplace APIs. The executor ensures:
 
-- Raw API responses
-- OAuth tokens or API keys
-- Email body content
-- Calendar event descriptions
-- Any field whose key matches: `token`, `password`, `secret`, `authorization`, `credential`, `body`, `content`
+- Credentials never appear in tool results (they're env vars for the MCP server subprocess)
+- Gmail email body content is scrubbed before reaching Claude
+- Only allowlisted read-only tools are callable
+- RunTrace audit entries are validated against a credential sentinel before writing

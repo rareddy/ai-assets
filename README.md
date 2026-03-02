@@ -1,6 +1,6 @@
 # Status Report Agent
 
-A Python-based CLI agent that generates daily or periodic status reports by aggregating read-only activity data from your workplace tools — Jira, GitHub, Slack, Google Calendar, Google Drive, and Gmail — and synthesising them into a readable report using Claude.
+An agentic CLI tool that generates daily or periodic status reports by using Claude as an autonomous sub-agent with MCP (Model Context Protocol) tools connected to your workplace systems — Jira, GitHub, Slack, Google Calendar, Google Drive, and Gmail. Claude investigates your activity, drills into significant items, and produces a rich, detailed report.
 
 ## Quick Start
 
@@ -23,9 +23,29 @@ The first run defaults to "today". Every subsequent run without `--period` autom
 
 ---
 
+## How It Works
+
+Unlike traditional data aggregation tools, this agent uses Claude as the **autonomous brain**:
+
+1. **Python starts MCP servers** as subprocesses — each server connects to a workplace tool (GitHub, Jira, Slack, etc.)
+2. **Claude investigates** — it searches across all available tools, finds your activity, and drills into significant items (reads PR diffs, ticket descriptions, thread context)
+3. **Claude writes the report** — with genuine insight, not just a list of titles
+4. **Python enforces safety** — read-only tool allowlist, Gmail body scrubbing, turn limits
+
+```
+Python wrapper → start MCP servers → Claude agent loop:
+  ├── Claude decides what to investigate
+  ├── Claude calls MCP tools (search, get details, follow threads)
+  ├── Claude receives results, decides next action
+  ├── Claude drills into significant items for rich detail
+  └── Claude produces the final report with full context
+```
+
+---
+
 ## Installation
 
-**Requirements**: Python 3.12+ and [`uv`](https://docs.astral.sh/uv/)
+**Requirements**: Python 3.12+, [`uv`](https://docs.astral.sh/uv/), and Node.js 20+ (for MCP servers)
 
 ```bash
 git clone <repo-url> status-report
@@ -46,6 +66,8 @@ docker run --rm \
   status-report --user you@example.com
 ```
 
+The Docker image includes Python, Node.js, all MCP server packages, and Playwright for browser fallback.
+
 ---
 
 ## Configuration
@@ -63,21 +85,25 @@ Authentication uses [Google Application Default Credentials](https://cloud.googl
 
 At least one data source credential is also required (otherwise exit code 2).
 
-### Data Sources
+### Data Sources (MCP Servers)
 
-| Variable(s) | Source |
-|-------------|--------|
-| `JIRA_BASE_URL` + `JIRA_USER_EMAIL` + `JIRA_API_TOKEN` | Jira Cloud |
-| `SLACK_BOT_TOKEN` | Slack |
-| `GITHUB_TOKEN` | GitHub |
-| `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` + `GOOGLE_PROJECT_ID` | Calendar, Drive, Gmail |
+Each data source is accessed via an MCP server that starts as a subprocess. Credentials are passed as environment variables to the server process — they never flow through Claude.
+
+| Variable(s) | Source | MCP Server |
+|-------------|--------|-----------|
+| `GITHUB_TOKEN` | GitHub | `@modelcontextprotocol/server-github` |
+| `JIRA_BASE_URL` + `JIRA_USER_EMAIL` + `JIRA_API_TOKEN` | Jira Cloud | `@sooperset/mcp-atlassian` |
+| `SLACK_BOT_TOKEN` | Slack | `@modelcontextprotocol/server-slack` |
+| `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` + `GOOGLE_PROJECT_ID` | Calendar, Drive, Gmail | `@anthropic/google-workspace-mcp` |
+
+A Playwright browser fallback MCP server (`@playwright/mcp`) is always available for when native MCP servers are unconfigured.
 
 ### Optional
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model deployed in your Vertex AI project |
-| `SKILL_FETCH_LIMIT` | `100` | Max activity items per source per run |
+| `MAX_AGENT_TURNS` | `50` | Max agent loop iterations (Claude tool_use cycles) per report |
 
 ---
 
@@ -91,8 +117,14 @@ python -m status_report.main --user <email> [OPTIONS]
 |----------|----------|---------|-------------|
 | `--user` | Yes | — | Target user (email or username) |
 | `--period` | No | Auto from run history | Time range (see Period Formats) |
-| `--sources` | No | All configured | Comma-separated source names |
+| `--sources` | No | All configured | Comma-separated source labels |
 | `--format` | No | `text` | Output format: `text`, `markdown`, `json` |
+
+### Source Labels
+
+Available source labels for `--sources`:
+
+`github`, `jira`, `slack`, `google`, `browser`
 
 ### Period Formats
 
@@ -196,48 +228,55 @@ History is stored as JSONL, scoped per user, and pruned to 90 days automatically
 |------|---------|
 | `0` | Success — all configured sources returned data |
 | `1` | Partial — report generated; ≥1 source skipped |
-| `2` | Failure — no data retrieved; all sources failed or none configured |
+| `2` | Failure — no data retrieved; all MCP servers failed or none configured |
 | `3` | Invalid arguments — bad `--period`, unknown format, future date |
 
 ---
 
-## Vertex AI Setup
+## Read-Only Safety
 
-Claude runs on your own Google Cloud project via Vertex AI — no Anthropic API key needed.
+The agent enforces read-only access with a **3-layer defense**:
 
-1. Enable the Vertex AI API in your GCP project
-2. Grant your account (or service account) the **Vertex AI User** role
-3. Request access to Claude models in your region via the [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden)
-4. Set `VERTEX_PROJECT_ID` and `VERTEX_REGION` in `.env`
+1. **MCP server flags** — servers configured with read-only environment variables where supported
+2. **Tool allowlist filtering** — the registry only exposes whitelisted read-only tools to Claude
+3. **Runtime validation** — the executor validates every tool call against the allowlist before dispatch
 
-See [docs/user-guide.md](docs/user-guide.md#vertex-ai-setup) for the full setup walkthrough.
+Write tools are never exposed to Claude, regardless of what the MCP server provides.
+
+---
 
 ## Project Structure
 
 ```
 src/status_report/
-├── main.py           # CLI entry point
-├── agent.py          # Orchestration: concurrent fetch + Claude synthesis
+├── main.py           # CLI entry point + MCP server lifecycle
+├── agent.py          # Claude agent loop (tool_use cycle)
 ├── config.py         # Pydantic settings + period parsing
 ├── report.py         # Report model + text/markdown/json formatters
 ├── run_history.py    # Per-user run history (auto-period)
-├── run_log.py        # Audit log (runs.log)
-├── tracing.py        # LangFuse client
-├── skills/           # One module per data source
-└── auth/             # Google OAuth + token management
+├── run_log.py        # Audit log (runs.log) with MCP agentic fields
+├── tracing.py        # structlog configuration
+├── mcp/              # MCP infrastructure
+│   ├── config.py     # Server configs + env-based building
+│   ├── manager.py    # Server subprocess lifecycle
+│   ├── registry.py   # Tool allowlist filtering
+│   └── executor.py   # Tool dispatch + Gmail body scrubbing
+└── auth/             # Google OAuth consent flow
 ```
 
 ---
 
 ## Further Reading
 
-- **[User Guide](docs/user-guide.md)** — full feature documentation, multi-user setup, Docker details, custom skills, troubleshooting
+- **[User Guide](docs/user-guide.md)** — full feature documentation, Docker details, troubleshooting
 
 ---
 
 ## Security
 
-- **Read-only**: No skill ever writes, modifies, or deletes data in any external system.
-- **No secrets in code or logs**: All credentials come from environment variables or Google ADC. Nothing sensitive is logged.
+- **Read-only**: 3-layer defense prevents any write operation. No MCP tool can modify external systems.
+- **MCP credential isolation**: Credentials are passed as env vars to MCP server subprocesses. They never flow through Claude's context, tool arguments, or tool results.
+- **Gmail body scrub**: The executor removes email body content from Gmail tool results before they reach Claude. Permanent, no opt-in.
+- **No secrets in logs**: All credentials are excluded from structlog output and RunTrace audit entries.
 - **Local token storage**: Google OAuth tokens are stored in `~/.status-report/google_credentials.json` (permissions 600).
 - **`.env` is git-ignored** — never commit it.
