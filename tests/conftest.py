@@ -1,185 +1,199 @@
-"""Shared pytest fixtures for the status-report test suite."""
+"""Shared fixtures for MCP-based agentic architecture tests."""
 
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from status_report.config import Config, ReportPeriod
-from status_report.run_log import RunTrace
-from status_report.skills.base import ActivityItem
+from status_report.mcp.config import MCPServerConfig
+from status_report.mcp.manager import MCPServerHandle
+from status_report.mcp.registry import ToolRegistry
 
 
-# ── Config fixture ────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def mock_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """Set all required environment variables for Config instantiation."""
-    env = {
-        "ANTHROPIC_API_KEY": "sk-ant-test",
-        "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
-        "LANGFUSE_SECRET_KEY": "sk-lf-test",
-        "LANGFUSE_HOST": "https://cloud.langfuse.com",
-        "JIRA_BASE_URL": "https://test.atlassian.net",
-        "JIRA_USER_EMAIL": "alice@example.com",
-        "JIRA_API_TOKEN": "jira-token",
-        "SLACK_BOT_TOKEN": "xoxb-test",
-        "GITHUB_TOKEN": "ghp_test",
-        "GOOGLE_CLIENT_ID": "google-client-id",
-        "GOOGLE_CLIENT_SECRET": "google-client-secret",
-        "GOOGLE_PROJECT_ID": "test-project",
-        "SKILL_FETCH_LIMIT": "100",
-    }
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    return env
+# ── Config fixtures ───────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def config(mock_env: dict[str, str]) -> Config:
-    """Config instance with all credentials present."""
+def mock_env(monkeypatch):
+    """Set minimal required environment variables for Config."""
+    monkeypatch.setenv("VERTEX_PROJECT_ID", "test-project")
+    monkeypatch.setenv("VERTEX_REGION", "us-east5")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+
+
+@pytest.fixture
+def config(mock_env) -> Config:
+    """Minimal Config instance."""
     return Config()
 
 
 @pytest.fixture
-def minimal_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Environment with only required fields (no skill credentials)."""
-    for key in [
-        "ANTHROPIC_API_KEY",
-        "LANGFUSE_PUBLIC_KEY",
-        "LANGFUSE_SECRET_KEY",
-        "JIRA_BASE_URL",
-        "JIRA_USER_EMAIL",
-        "JIRA_API_TOKEN",
-        "SLACK_BOT_TOKEN",
-        "GITHUB_TOKEN",
-        "GOOGLE_CLIENT_ID",
-        "GOOGLE_CLIENT_SECRET",
-        "GOOGLE_PROJECT_ID",
-    ]:
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
-
-
-# ── Time fixtures ─────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def now() -> datetime:
-    return datetime.now(UTC)
-
-
-@pytest.fixture
-def today_period(now: datetime) -> ReportPeriod:
+def sample_period() -> ReportPeriod:
+    """A sample report period (today)."""
+    now = datetime.now(UTC)
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return ReportPeriod(label="today", start=start, end=now)
 
 
-# ── ActivityItem factory ───────────────────────────────────────────────────────
+# ── MCP mock fixtures ─────────────────────────────────────────────────────────
 
 
-def make_activity_item(
-    source: str = "jira",
-    action_type: str = "updated",
-    title: str = "Test Issue",
-    timestamp: datetime | None = None,
-    url: str | None = "https://example.com/item/1",
-    metadata: dict[str, str] | None = None,
-) -> ActivityItem:
-    return ActivityItem(
-        source=source,
-        action_type=action_type,
-        title=title,
-        timestamp=timestamp or datetime.now(UTC),
-        url=url,
-        metadata=metadata or {},
+@pytest.fixture
+def github_mcp_config() -> MCPServerConfig:
+    """GitHub MCP server config for testing."""
+    return MCPServerConfig(
+        name="github",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-github"],
+        env={"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_test"},
+        read_only_tools=[
+            "search_repositories",
+            "get_file_contents",
+            "list_commits",
+            "get_pull_request",
+            "list_pull_requests",
+            "search_issues",
+        ],
+        source_label="github",
     )
 
 
 @pytest.fixture
-def sample_item() -> ActivityItem:
-    return make_activity_item()
-
-
-@pytest.fixture
-def sample_items() -> list[ActivityItem]:
-    return [
-        make_activity_item(source="jira", title="JIRA-100 Deploy fix"),
-        make_activity_item(source="github", action_type="merged", title="PR #42"),
-        make_activity_item(source="slack", action_type="sent", title="Team standup thread"),
-    ]
-
-
-# ── Log directory fixture ─────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def tmp_log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect RunLogger to a temporary directory (never touches ~/.status-report)."""
-    log_dir = tmp_path / ".status-report"
-    log_dir.mkdir()
-    return log_dir
-
-
-# ── Anthropic mock ────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def mock_anthropic():
-    """Patch the Anthropic client to return a canned Claude response."""
-    fake_text = (
-        "## Key Accomplishments\n- Merged PR #42\n\n## Suggested Follow-ups\n- Review JIRA-100"
+def jira_mcp_config() -> MCPServerConfig:
+    """Jira MCP server config for testing."""
+    return MCPServerConfig(
+        name="jira",
+        command="npx",
+        args=["-y", "@sooperset/mcp-atlassian"],
+        env={
+            "JIRA_URL": "https://test.atlassian.net",
+            "JIRA_USERNAME": "test@example.com",
+            "JIRA_API_TOKEN": "test-token",
+        },
+        read_only_tools=["jira_search", "jira_get_issue"],
+        source_label="jira",
     )
-    fake_response = MagicMock()
-    fake_response.content = [MagicMock(text=fake_text)]
-
-    with patch("status_report.agent.anthropic.Anthropic") as mock_cls:
-        client = MagicMock()
-        client.messages.create.return_value = fake_response
-        mock_cls.return_value = client
-        yield client
-
-
-# ── LangFuse mock ─────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def mock_langfuse():
-    """Patch LangFuse so no HTTP calls are made during tests."""
-    with patch("status_report.tracing.Langfuse") as mock_cls:
-        client = MagicMock()
-        trace = MagicMock()
-        span = MagicMock()
-        trace.span.return_value = span
-        trace.generation.return_value = span
-        client.trace.return_value = trace
-        mock_cls.return_value = client
-        yield client
-
-
-# ── RunTrace factory ──────────────────────────────────────────────────────────
-
-
-def make_run_trace(**kwargs: Any) -> RunTrace:
-    defaults = dict(
-        timestamp="2026-02-28T09:45:30.123456Z",
-        user="alice@example.com",
-        period="today",
-        format="text",
-        sources_attempted=["jira", "github"],
-        counts={"jira": 5, "github": 3},
-        outcome="success",
-        skipped=[],
-        retries={},
-        duration_seconds=12.5,
+def google_mcp_config() -> MCPServerConfig:
+    """Google Workspace MCP server config for testing."""
+    return MCPServerConfig(
+        name="google_workspace",
+        command="npx",
+        args=["-y", "@anthropic/google-workspace-mcp"],
+        env={
+            "GOOGLE_CLIENT_ID": "test-client-id",
+            "GOOGLE_CLIENT_SECRET": "test-secret",
+        },
+        read_only_tools=[
+            "calendar_list_events",
+            "gmail_search_messages",
+            "gmail_get_message",
+            "drive_search_files",
+        ],
+        source_label="google",
     )
-    defaults.update(kwargs)
-    return RunTrace(**defaults)
+
+
+def _make_mock_session(tools: list[dict[str, Any]]) -> AsyncMock:
+    """Create a mock MCP ClientSession with given tools."""
+    session = AsyncMock()
+    # Mock list_tools response
+    tool_objects = []
+    for t in tools:
+        tool_obj = MagicMock()
+        tool_obj.name = t["name"]
+        tool_obj.description = t.get("description", "")
+        tool_obj.inputSchema = t.get("input_schema", {"type": "object", "properties": {}})
+        tool_objects.append(tool_obj)
+
+    tools_result = MagicMock()
+    tools_result.tools = tool_objects
+    session.list_tools = AsyncMock(return_value=tools_result)
+    session.initialize = AsyncMock()
+
+    return session
+
+
+def make_server_handle(
+    config: MCPServerConfig,
+    tools: list[dict[str, Any]] | None = None,
+) -> MCPServerHandle:
+    """Create a mock MCPServerHandle for testing.
+
+    Args:
+        config: MCP server config.
+        tools: Tool definitions. If None, uses config's read_only_tools with
+            minimal schemas.
+    """
+    if tools is None:
+        tools = [
+            {
+                "name": name,
+                "description": f"Test tool: {name}",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+            for name in config.read_only_tools
+        ]
+
+    session = _make_mock_session(tools)
+
+    return MCPServerHandle(
+        config=config,
+        session=session,
+        tools=tools,
+    )
+
+
+# ── Claude response factories ─────────────────────────────────────────────────
+
+
+def make_tool_use_response(
+    tool_calls: list[dict[str, Any]],
+) -> MagicMock:
+    """Create a mock Claude response with tool_use content blocks.
+
+    Args:
+        tool_calls: List of dicts with 'id', 'name', 'input' keys.
+    """
+    response = MagicMock()
+    response.stop_reason = "tool_use"
+
+    content_blocks = []
+    for tc in tool_calls:
+        block = MagicMock()
+        block.type = "tool_use"
+        block.id = tc.get("id", "tool_call_1")
+        block.name = tc["name"]
+        block.input = tc.get("input", {})
+        content_blocks.append(block)
+
+    response.content = content_blocks
+    response.usage = MagicMock()
+    response.usage.input_tokens = 100
+    response.usage.output_tokens = 50
+    return response
+
+
+def make_text_response(text: str) -> MagicMock:
+    """Create a mock Claude response with a text content block (end_turn)."""
+    response = MagicMock()
+    response.stop_reason = "end_turn"
+
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
+
+    response.content = [block]
+    response.usage = MagicMock()
+    response.usage.input_tokens = 200
+    response.usage.output_tokens = 300
+    return response

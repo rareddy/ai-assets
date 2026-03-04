@@ -91,13 +91,10 @@ def parse_period(value: str) -> ReportPeriod:
 class Config(BaseSettings):
     """Application configuration loaded from environment variables."""
 
-    # Anthropic
-    anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
-
-    # LangFuse
-    langfuse_public_key: str = Field(..., alias="LANGFUSE_PUBLIC_KEY")
-    langfuse_secret_key: str = Field(..., alias="LANGFUSE_SECRET_KEY")
-    langfuse_host: str = Field("https://cloud.langfuse.com", alias="LANGFUSE_HOST")
+    # Vertex AI (Claude is deployed here — no API key needed; uses Google ADC)
+    vertex_project_id: str = Field(..., alias="VERTEX_PROJECT_ID")
+    vertex_region: str = Field("us-east5", alias="VERTEX_REGION")
+    claude_model: str = Field("claude-sonnet-4-6", alias="CLAUDE_MODEL")
 
     # Jira (optional)
     jira_base_url: Optional[str] = Field(None, alias="JIRA_BASE_URL")
@@ -115,14 +112,14 @@ class Config(BaseSettings):
     google_client_secret: Optional[str] = Field(None, alias="GOOGLE_CLIENT_SECRET")
     google_project_id: Optional[str] = Field(None, alias="GOOGLE_PROJECT_ID")
 
-    # Skill fetch cap
-    skill_fetch_limit: int = Field(100, alias="SKILL_FETCH_LIMIT")
+    # Agent limits
+    max_agent_turns: int = Field(50, alias="MAX_AGENT_TURNS")
 
-    @field_validator("skill_fetch_limit")
+    @field_validator("max_agent_turns")
     @classmethod
-    def validate_fetch_limit(cls, v: int) -> int:
+    def validate_max_turns(cls, v: int) -> int:
         if v < 1:
-            raise ValueError("SKILL_FETCH_LIMIT must be >= 1")
+            raise ValueError("MAX_AGENT_TURNS must be >= 1")
         return v
 
     model_config = {"populate_by_name": True, "extra": "ignore"}

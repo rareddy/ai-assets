@@ -1,32 +1,29 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 2.0.0 → 3.0.0 (MAJOR: Principle III fundamentally redefined;
-  backward-incompatible governance change — "Skill-Based Tool Orchestration by Claude"
-  replaced by "Python-Orchestrated Skill Execution + Claude Synthesis")
+Version change: 3.1.0 → 4.0.0 (MAJOR: Principles II, III, VI, VII fundamentally
+  redefined for MCP-based agentic architecture — backward-incompatible governance change)
 Modified principles:
-  - Principle II: "Async-First Agent Loop" → "Async-First Skill Execution"
-    (re-anchored to asyncio.gather over skills; removed Anthropic SDK tool-use
-    orchestration language)
-  - Principle III: "Skill-Based Data Collection via Tool Orchestration" →
-    "Python-Orchestrated Skill Execution + Claude Synthesis" (complete
-    redefinition — MAJOR trigger; Claude no longer decides which tools to call)
-  - Principle VI: "Test-First with Mocked Tool Invocations" → "Test-First with
-    Mocked Skill I/O" (testing target shifts back to mocking HTTP/browser calls
-    within skills; Anthropic SDK mocked for synthesis step only)
-  - Principle VII: minor cleanup — removed tool-orchestration-specific language;
-    Playwright browser dependency noted for container build
+  - Principle II: "Async-First Skill Execution" → "Async-First MCP Lifecycle"
+    (MCP server subprocess management replaces asyncio.gather over skills)
+  - Principle III: "Python-Orchestrated Skill Execution + Claude Synthesis" →
+    "Agent-Orchestrated Data Collection via MCP" (complete redefinition — MAJOR trigger;
+    Claude IS the agent — it decides what to investigate via MCP tools; Python is
+    infrastructure only)
+  - Principle IV: Retitled "Structured Observability" — LangFuse references removed,
+    structlog + RunTrace JSONL is the sole observability surface
+  - Principle V: Updated for MCP credential isolation (env vars passed to MCP server
+    subprocesses, never to Claude)
+  - Principle VI: "Test-First with Mocked Skill I/O" → "Test-First with Mocked MCP
+    Sessions" (testing target shifts to mocking MCP tool calls + Claude agent loop)
+  - Principle VII: "Container-First Runtime" updated for Node.js + MCP servers
 Added sections: none
 Removed sections: none
 Templates requiring updates:
-  - .specify/templates/plan-template.md ✅ Constitution Check gate unchanged
-  - .specify/templates/spec-template.md ✅ no structural changes required
-  - .specify/templates/tasks-template.md ✅ skill task patterns remain valid
-  - .specify/templates/agent-file-template.md ✅ no changes needed
+  - .specify/templates/plan-template.md: Constitution Check gate should reference
+    MCP tool allowlist and agent loop safety ⚠ pending
 Follow-up TODOs:
-  - TODO(RATIFICATION_DATE): Set to 2026-02-26; update if prior adoption date applies.
-  - TODO(BASE_IMAGE): Confirm exact Python base image tag once Dockerfile is authored.
-  - TODO(BROWSER_TOOL): Confirm Playwright vs alternative for browser skill fallback.
+  - Confirm MCP server npm packages once installed
 -->
 
 # Status Report Agent Constitution
@@ -35,116 +32,106 @@ Follow-up TODOs:
 
 ### I. Read-Only Data Access (NON-NEGOTIABLE)
 
-All skill tools MUST be strictly read-only. No skill or tool may issue any call that
-creates, modifies, or deletes data in any external system.
+All MCP tools exposed to Claude MUST be strictly read-only. No tool may issue any call
+that creates, modifies, or deletes data in any external system.
 
-- All HTTP calls within tools MUST use GET or read-equivalent search methods only.
-  POST/PUT/PATCH/DELETE are FORBIDDEN in skill and tool modules.
-- OAuth scopes and API token permissions MUST be scoped to the minimum read-only set
-  defined per platform (e.g., `read:jira-work`, `calendar.readonly`).
-- Read-only enforcement MUST be applied at two layers: OAuth/token scope configuration
-  AND code-level (only GET/search requests in `skills/` and `tools/`).
-- Any new skill added MUST have its read-only contract explicitly stated and reviewed
-  before merging.
+- MCP servers MUST be configured with read-only flags where available (e.g.,
+  `GITHUB_READ_ONLY=1` for github-mcp-server).
+- A tool allowlist in the registry MUST filter out any write/mutate tools before
+  exposing them to Claude's agent loop.
+- Runtime validation in the executor MUST reject tool calls not on the allowlist.
+- Read-only enforcement MUST be applied at three layers: MCP server configuration,
+  tool allowlist filtering, AND runtime validation before dispatch.
+- Any new MCP server added MUST have its read-only tool set explicitly defined and
+  reviewed before merging.
 
 **Rationale**: The agent aggregates sensitive workplace data. Write access, even
 accidental, could corrupt project management, calendar, or communication systems with
-serious professional consequences. Two-layer enforcement ensures no single point of
+serious professional consequences. Three-layer enforcement ensures no single point of
 failure.
 
-### II. Async-First Skill Execution
+### II. Async-First MCP Lifecycle
 
-All I/O-bound operations within the agent and its skills MUST use Python `async/await`.
-Blocking I/O in the async event loop is FORBIDDEN.
+All I/O-bound operations — MCP server management, Claude API calls, and tool
+dispatch — MUST use Python `async/await`. Blocking I/O in the async event loop is
+FORBIDDEN.
 
-- All skill `fetch_activity` implementations MUST be async coroutines.
-- The Python orchestrator MUST dispatch all enabled skills concurrently using
-  `asyncio.gather` — never sequentially in a loop.
-- All HTTP requests within skills MUST use `httpx.AsyncClient`.
-- Browser automation within skills (Playwright) MUST use its async API.
+- MCP server subprocesses MUST be started and stopped via async context managers.
+- The Claude agent loop (tool_use → result → next turn) MUST be fully async.
+- Tool call dispatch to MCP sessions MUST use the MCP SDK's async `call_tool` method.
 - `pytest-asyncio` MUST be used for all tests involving async code.
 
-**Rationale**: The agent queries 5+ external platforms per run. Concurrent skill
-execution via `asyncio.gather` is the minimal viable approach for a responsive report
-generation time. Sequential skill fetching is FORBIDDEN.
+**Rationale**: The agent manages multiple MCP server subprocesses and runs an
+iterative agent loop with Claude. Async lifecycle management ensures responsive
+startup/shutdown and non-blocking tool dispatch.
 
-### III. Python-Orchestrated Skill Execution + Claude Synthesis
+### III. Agent-Orchestrated Data Collection via MCP
 
-Data collection MUST be performed by the Python orchestrator invoking all enabled
-skills deterministically and concurrently. Claude MUST be invoked exactly once per
-report run, receiving fully aggregated structured data, and used exclusively for
-natural-language synthesis.
+Claude MUST be the autonomous agent that drives data collection, investigation, and
+synthesis. Python is infrastructure — it starts MCP servers, enforces safety rails,
+and formats output. All intelligence lives in Claude's agent loop.
 
-**Skill contract**: Each data source MUST be implemented as a skill — a Python module
-implementing the `ActivitySkill` abstract base class:
+**Agent contract**: Claude operates in a `tool_use` loop via the `AnthropicVertex` SDK:
+1. Claude receives a system prompt guiding its sub-agent behavior (discover → investigate
+   → report).
+2. Claude decides which MCP tools to call based on the user's request and period.
+3. Tool results flow back to Claude, which decides the next action.
+4. Claude drills into significant items for rich detail (reading PR diffs, ticket
+   descriptions, thread context).
+5. Claude produces the final report when it has enough context.
 
-- `async def fetch_activity(user: str, start: datetime, end: datetime) -> list[ActivityItem]`
-- `def is_configured(self) -> bool`
+**Python's role** is strictly infrastructure. Python MUST:
+1. Start MCP server subprocesses and collect their tool schemas.
+2. Filter tools through the read-only allowlist.
+3. Route Claude's `tool_use` blocks to the correct MCP session.
+4. Enforce safety: turn limits, Gmail body scrubbing, tool allowlist validation.
+5. Capture the final report text from Claude's last response.
 
-Each skill MUST internally manage its own access method, falling back in priority order:
-1. Official REST or GraphQL API (preferred — fastest, most structured)
-2. Authenticated browser scraping via Playwright (when API is unavailable or
-   insufficient)
-3. Unauthenticated web scraping (last resort only, and only where permitted)
+**Claude's role** is autonomous investigation and synthesis. Claude MUST:
+- Decide which tools to call and in what order.
+- Determine what deserves deeper investigation vs. surface-level mention.
+- Handle tool errors by retrying, skipping, or trying alternatives.
+- Produce a rich, detailed report — not just a list of titles.
 
-The fallback decision logic MUST live inside the skill. The orchestrator MUST NOT know
-or care which access method a skill used.
+The Anthropic Python SDK (`AnthropicVertex`) MUST be used directly — Claude CLI or any
+CLI wrapper MUST NOT be used as the runtime.
 
-**Orchestrator contract**: `agent.py` MUST:
-1. Read configuration and call `is_configured()` on each skill at startup.
-2. Invoke all enabled skills concurrently via `asyncio.gather`.
-3. Collect and aggregate results into a single structured payload.
-4. Pass the aggregated payload to Claude once for synthesis.
+**Rationale**: The old architecture produced shallow reports because Claude only saw
+pre-collected summaries. By making Claude the agent with direct tool access, it can
+investigate, follow threads, read PR diffs, and produce reports with genuine insight.
+The quality comes from Claude's judgment, not from Python data pipelines.
 
-**Claude's role** is strictly synthesis. Claude MUST NOT:
-- Decide which skills to run.
-- Make decisions about which URLs, endpoints, or queries to use.
-- Receive raw credentials, API blobs, HTML, or stack traces.
+### IV. Structured Observability
 
-Claude's input MUST be structured `ActivityItem` data. Claude's output MUST be the
-final formatted report (text, markdown, or JSON). The Anthropic Python SDK MUST be
-used directly — Claude CLI or any CLI wrapper MUST NOT be used as the runtime.
+Every agent run MUST produce a complete audit trail via `structlog` and the `RunTrace`
+JSONL log.
 
-**Rationale**: For a fixed set of known data sources, Python orchestration is
-deterministic, cheaper (one Claude call vs. one per tool decision), and faster (true
-parallel execution). Claude is used for what it does best — language and reasoning —
-not for control flow that is better expressed in code.
+- Every agent execution MUST create a `RunTrace` entry in `~/.status-report/runs.log`.
+- `RunTrace` MUST capture: timestamp, user, period, MCP servers started, sources
+  attempted, tool calls count, agent turns, total tokens, outcome, skipped sources,
+  and duration.
+- `structlog` MUST log significant events: MCP server start/stop, agent loop turns,
+  tool calls dispatched, errors, and report generation.
+- Log output MUST NEVER contain raw tokens, passwords, OAuth credentials, or any
+  secrets. Log attributes MUST be scrubbed before logging.
 
-### IV. Observability-First with LangFuse
-
-Every agent run MUST produce a complete LangFuse trace. All significant operations MUST
-be instrumented as child spans.
-
-- Every agent execution MUST create a top-level LangFuse trace.
-- Each tool invocation (per skill) AND the final Claude synthesis step MUST be separate
-  child spans.
-- Claude API token usage MUST be tracked per report generation via LangFuse cost
-  tracking.
-- The `@observe` decorator from the `langfuse` Python SDK MUST be used for automatic
-  span creation wherever applicable.
-- Report-generation system prompts MUST be stored in the LangFuse prompt registry for
-  versioning, not hardcoded in source files.
-- LangFuse spans MUST NEVER contain raw tokens, passwords, OAuth credentials, or any
-  secrets. Span attributes MUST be scrubbed before logging.
-
-**Rationale**: LangFuse is the primary auditability and debugging surface for this
-agent. Without complete traces, diagnosing incorrect reports or tool failures is not
-feasible. Prompt registry versioning enables controlled iteration on report quality.
+**Rationale**: `structlog` plus the JSONL audit log provide complete observability for
+debugging agent behavior, tracking tool usage, and monitoring costs.
 
 ### V. Secrets & Credential Hygiene (NON-NEGOTIABLE)
 
-Credentials MUST never appear in source code, tool arguments, logs, traces, or version
-control.
+Credentials MUST never appear in source code, tool arguments, logs, or version control.
 
 - All credentials (API tokens, OAuth secrets, client IDs) MUST be loaded exclusively
   from environment variables or the designated secure token store
   (`~/.status-report/google_credentials.json` for Google OAuth).
-- Skills MUST resolve credentials at initialization time from env vars and pass only
-  opaque, already-authenticated client objects into tool execution — never raw secrets.
+- Credentials MUST be passed to MCP server subprocesses as environment variables at
+  launch time. Raw secrets MUST NOT flow through Claude's context, tool arguments,
+  or tool results.
 - `.env` MUST be listed in `.gitignore`. Committing `.env` is FORBIDDEN.
 - `.env.example` MUST be maintained with placeholder values for all required keys.
-- `structlog` log statements and LangFuse span attributes MUST be audited to confirm no
-  credential leakage before any merge.
+- `structlog` log statements MUST be audited to confirm no credential leakage before
+  any merge.
 - Google OAuth tokens MUST be refreshed automatically; expired tokens MUST NOT cause
   hard failures without a clear re-authentication prompt.
 
@@ -152,30 +139,29 @@ control.
 A credential leak would expose the user's entire digital work footprint. Non-negotiable
 hygiene is the only acceptable posture.
 
-### VI. Test-First with Mocked Skill I/O
+### VI. Test-First with Mocked MCP Sessions
 
-All external I/O within skills and the Anthropic SDK call for synthesis MUST be mocked
-in tests. Tests for new skills MUST be written before or alongside the implementation.
+All MCP interactions and Claude API calls MUST be mocked in tests. Tests for new MCP
+integrations MUST be written before or alongside the implementation.
 
 - `pytest` with `pytest-asyncio` is the required test framework.
-- All HTTP calls within skill API paths MUST be mocked using `respx` or an equivalent
-  `httpx` mock library. Live API calls in tests are FORBIDDEN.
-- Playwright browser automation within skill browser-fallback paths MUST be mocked or
-  run against a local test server. Live browser sessions in tests are FORBIDDEN.
-- The Anthropic SDK synthesis call in `agent.py` MUST be mocked using `unittest.mock`.
-  Live Anthropic API calls in tests are FORBIDDEN.
-- Each skill MUST have a corresponding test file in `tests/skills/`.
-- `conftest.py` MUST centralize shared fixtures: mock `httpx` client, mock Playwright
-  page, mock Anthropic client, sample `ActivityItem` lists, and date range helpers.
-- Skill tests MUST cover: successful API fetch, successful browser-fallback fetch,
-  `is_configured()` returning `False` when credentials are absent, API rate-limit
-  error handling, and empty result sets.
-- Orchestrator tests MUST cover: concurrent skill dispatch, partial skill failure
-  (one skill errors, others succeed), and the aggregated payload passed to Claude.
+- MCP tool calls MUST be mocked using `unittest.mock` or custom MCP session mocks
+  that return predetermined tool results. Live MCP server processes in tests are
+  FORBIDDEN.
+- The Claude agent loop MUST be tested with staged `tool_use` responses that simulate
+  multi-turn investigation. Live Anthropic API calls in tests are FORBIDDEN.
+- `conftest.py` MUST centralize shared fixtures: mock MCP sessions, Claude `tool_use`
+  response factories, config fixtures, and sample tool results.
+- Agent loop tests MUST cover: successful multi-turn investigation, tool errors handled
+  by Claude, turn limit enforcement, Gmail body scrubbing, and partial source failure.
+- MCP manager tests MUST cover: server startup, shutdown, and process lifecycle.
+- MCP registry tests MUST cover: tool allowlist filtering, unknown tool rejection.
+- MCP executor tests MUST cover: tool dispatch routing, Gmail body scrubbing, safety
+  validation.
 
-**Rationale**: Skills and the orchestrator depend on external services and the
+**Rationale**: The agent loop and MCP interactions depend on external services and the
 Anthropic API. Without mocking, tests are slow, flaky, and require live credentials.
-Mocked tests document each skill's expected I/O contract independently of live systems.
+Mocked tests document the agent's expected behavior independently of live systems.
 
 ### VII. Container-First Runtime (Standalone Agent Package)
 
@@ -186,10 +172,12 @@ runtime is permitted.
 - A `Dockerfile` MUST be maintained at the repository root using the official Python
   slim base image pinned to the project's required minor version
   (e.g., `python:3.12-slim`).
-- `uv` MUST be used inside the container to install dependencies from `pyproject.toml`,
-  ensuring reproducible builds.
-- The `Dockerfile` MUST install Playwright and its browser binaries to support skill
-  browser-fallback paths (`playwright install --with-deps chromium`).
+- `uv` MUST be used inside the container to install Python dependencies from
+  `pyproject.toml`, ensuring reproducible builds.
+- The `Dockerfile` MUST install Node.js and npm MCP server packages at build time
+  for stdio-based MCP servers (GitHub, Jira, Slack, Google Workspace).
+- The `Dockerfile` MUST install Playwright and its browser binaries to support the
+  Playwright MCP server browser-fallback path.
 - The agent MUST be invocable as a self-contained CLI:
   `python -m status_report.main` or the equivalent `pyproject.toml` script entrypoint.
 - The container MUST be stateless. All configuration and credentials MUST be injected
@@ -199,50 +187,68 @@ runtime is permitted.
   image.
 - The container image MUST NOT run as root. A dedicated non-root user MUST be declared
   in the `Dockerfile`.
-- Container builds MUST be reproducible: the same source commit MUST produce a
-  functionally identical image across environments.
-- The `Dockerfile` MUST be validated in CI on every PR.
+- Container builds MUST be reproducible.
 
-**Rationale**: A container encapsulates Python dependencies, Playwright browsers (for
-skill fallbacks), and the agent CLI in one portable artifact. This eliminates
-environment inconsistencies across local, CI, and cloud-scheduler execution contexts.
+**Rationale**: A container encapsulates Python dependencies, Node.js MCP servers,
+Playwright browsers (for the browser-fallback MCP server), and the agent CLI in one
+portable artifact. This eliminates environment inconsistencies across local, CI, and
+cloud-scheduler execution contexts.
+
+### VIII. Documentation-as-Code
+
+`README.md` and `docs/user-guide.md` MUST be kept current with every change that
+affects user-visible behaviour. Documentation is part of the feature, not an afterthought.
+
+**Triggers — documentation MUST be updated before merging when**:
+- A CLI argument is added, removed, or its default changes
+- A new data source (MCP server) is added or removed
+- A new environment variable is introduced or renamed
+- The auto-period or run-history behaviour changes
+- Output format (text, markdown, JSON) structure changes
+- Exit code semantics change
+- Installation or setup steps change
+
+**Scope**:
+- `README.md`: Quick-start, configuration table, CLI argument table, period formats,
+  output format samples, exit code table. Keep concise; link to the user guide for depth.
+- `docs/user-guide.md`: Complete reference for all features.
+
+**Enforcement**:
+- Every PR that changes user-visible behaviour MUST include documentation updates in
+  the same commit or PR.
+
+**Rationale**: Users rely on `README.md` and `docs/user-guide.md` as the authoritative
+reference. Stale documentation is indistinguishable from a bug.
 
 ## Security Requirements
 
-- **Scope minimization**: OAuth and token scopes MUST be the minimum read-only set
-  defined per platform. Requests for broader scopes MUST be explicitly justified and
-  approved.
-- **No write operations**: Enforced by Principle I. Any code path introducing a
-  non-GET HTTP method in `skills/` or `tools/` MUST be rejected at code review.
-- **Secret scanning**: CI MUST include a secrets scanner (e.g., `detect-secrets` or
-  `truffleHog`) to prevent accidental credential commits.
-- **Privacy by design**: The Google Calendar skill MUST fetch only meeting metadata
-  (title, time, attendee count). Meeting notes, attachments, and body content MUST NOT
-  be fetched unless explicitly opt-in configured by the user.
+- **Scope minimization**: MCP servers MUST be configured with the minimum read-only
+  tool set. Write tools MUST be filtered out at the registry layer.
+- **No write operations**: Enforced by Principle I. Any tool not on the read-only
+  allowlist MUST be rejected at code review and at runtime.
+- **Secret scanning**: CI MUST include a secrets scanner to prevent accidental
+  credential commits.
+- **Privacy by design**: Gmail tool results MUST have body content scrubbed by the
+  executor before reaching Claude. Google Calendar tools MUST return only meeting
+  metadata (title, time, attendee count) — no notes, attachments, or body content.
 - **Token storage**: Google OAuth refresh tokens MUST be stored in
-  `~/.status-report/google_credentials.json` with `600` file permissions. Token files
-  MUST NOT be stored in the project directory or any version-controlled path.
-- **Tool argument safety**: Tool schemas registered with Claude MUST NOT include fields
-  that accept raw credentials. Authentication MUST be pre-resolved before tool
-  registration.
+  `~/.status-report/google_credentials.json` with `600` file permissions.
+- **MCP credential isolation**: Credentials are passed as environment variables to MCP
+  server subprocesses. They MUST NOT appear in tool schemas, tool arguments, or tool
+  results visible to Claude.
 
 ## Error Handling & Resilience
 
-- **Graceful degradation**: If a skill's credentials are missing, invalid, or all
-  access methods (API, browser, scrape) are exhausted, that skill MUST return a
-  structured error result. The agent MUST include a note in the final report and
-  continue without failing the entire run.
-- **Fallback transparency**: When a skill falls back from API to browser scraping (or
-  further), this MUST be logged via `structlog` at `warning` level and recorded as a
-  span attribute in LangFuse.
-- **Rate limit transparency**: Rate-limit errors MUST be surfaced clearly in the
-  structured tool result with retry-after guidance. Silent swallowing is FORBIDDEN.
+- **Graceful degradation**: If an MCP server fails to start or a tool returns an error,
+  Claude handles it directly — it decides whether to retry, skip, or try an alternative.
+  The agent loop continues with available tools.
+- **Turn limits**: The agent loop MUST enforce a configurable maximum number of turns
+  (`max_agent_turns`, default 50). If the limit is reached, Claude is asked to produce
+  its best report with the data collected so far.
 - **Structured logging**: All errors MUST be logged via `structlog` at the appropriate
-  level. Raw exception tracebacks MUST NOT be forwarded to Claude or appear in
-  LangFuse span attributes visible to end users.
-- **Configuration validation**: Each skill's `is_configured()` method MUST be called
-  at agent startup. Unconfigured skills MUST be logged as warnings and excluded from
-  the tool registry for that run.
+  level. Raw exception tracebacks MUST NOT be forwarded to Claude.
+- **MCP server health**: If an MCP server process exits unexpectedly, the executor
+  MUST log a warning and exclude that source's tools from subsequent turns.
 
 ## Governance
 
@@ -257,24 +263,16 @@ ad-hoc decisions made during implementation.
    changed rule.
 3. After approval, update this file, increment the version per the semantic versioning
    policy below, and update `LAST_AMENDED_DATE`.
-4. Propagate changes to dependent templates (plan-template, spec-template,
-   tasks-template) as required.
+4. Propagate changes to dependent templates as required.
 
 **Versioning policy**:
-- MAJOR: Removal or fundamental redefinition of an existing principle
-  (backward-incompatible governance change).
+- MAJOR: Removal or fundamental redefinition of an existing principle.
 - MINOR: New principle or section added, or materially expanded guidance.
-- PATCH: Clarifications, wording improvements, typo fixes, non-semantic refinements.
+- PATCH: Clarifications, wording improvements, typo fixes.
 
 **Compliance review**:
-- Every PR MUST be reviewed against the Constitution Check gate in `plan-template.md`
-  before implementation begins.
-- Principle I (Read-Only) and Principle V (Secrets) MUST be verified as a mandatory
-  checklist item on every PR touching `skills/`, `tools/`, or `auth/`.
-- Constitution adherence is a blocking criterion for merge approval.
+- Every PR MUST be reviewed against the Constitution.
+- Principle I (Read-Only) and Principle V (Secrets) MUST be verified on every PR
+  touching `mcp/`, `auth/`, or agent loop code.
 
-**Runtime guidance**: For day-to-day development conventions (commands, code style,
-active technologies), refer to the auto-generated agent guidance file at
-`.specify/memory/agent-guidance.md` (generated by `/speckit.plan`).
-
-**Version**: 3.0.0 | **Ratified**: 2026-02-26 | **Last Amended**: 2026-02-27
+**Version**: 4.0.0 | **Ratified**: 2026-02-26 | **Last Amended**: 2026-03-01

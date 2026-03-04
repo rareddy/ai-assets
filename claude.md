@@ -2,20 +2,21 @@
 
 ## Project Overview
 
-A Python-based agent that generates daily/periodic status reports for an individual by
-aggregating READ-ONLY activity data from multiple workplace systems. The Python
-orchestrator runs all skills concurrently and passes the aggregated results to Claude
-once for synthesis. LangFuse provides observability and tracing.
+A Python-based agentic system that generates daily/periodic status reports for an
+individual by using Claude as an autonomous sub-agent with MCP (Model Context Protocol)
+tools connected to workplace systems. Claude drives data collection, investigates
+significant items in depth, and synthesizes rich reports. Python is minimal
+infrastructure: it starts MCP servers, enforces read-only safety, and formats output.
 
 ## Tech Stack
 
 - **Language**: Python 3.12+
 - **Package Manager**: uv
-- **LLM**: Claude via Anthropic Python SDK (direct SDK usage — no CLI wrapper)
-- **HTTP Client**: httpx (async)
-- **Browser Automation**: Playwright (async, for skill API-fallback paths)
-- **Observability**: LangFuse (tracing, prompt management, evaluation)
-- **Authentication**: OAuth 2.0 (Google Suite), API tokens (Jira, GitHub, Slack)
+- **LLM**: Claude via Vertex AI (`anthropic[vertex]` SDK — `AnthropicVertex` client)
+- **MCP**: Model Context Protocol servers for data source access (stdio transport)
+- **MCP SDK**: `mcp` Python package for stdio client sessions
+- **Observability**: structlog (JSON in containers, console in TTY)
+- **Authentication**: Google ADC for Vertex AI, env vars passed to MCP servers
 - **Configuration**: Environment variables via `.env` file
 - **Runtime**: Docker container (standalone, stateless)
 
@@ -24,163 +25,109 @@ once for synthesis. LangFuse provides observability and tracing.
 ```
 status-report/
 ├── CLAUDE.md
-├── Dockerfile                    # container build; includes Playwright browsers
+├── Dockerfile                    # container build; includes Node.js + MCP servers + Playwright
 ├── pyproject.toml
 ├── .env                          # secrets — NEVER commit
 ├── .env.example                  # placeholder keys for all required env vars
 ├── src/
 │   └── status_report/
 │       ├── __init__.py
-│       ├── main.py               # CLI entrypoint
-│       ├── agent.py              # orchestrator: runs skills concurrently, calls Claude once
+│       ├── main.py               # CLI entrypoint, MCP server lifecycle
+│       ├── agent.py              # Claude agent loop (tool_use cycle)
 │       ├── config.py             # settings and env var loading
-│       ├── tracing.py            # LangFuse instrumentation setup
+│       ├── tracing.py            # structlog configuration
 │       ├── report.py             # report formatting and output
-│       ├── skills/               # one skill per data source
+│       ├── run_log.py            # JSONL audit trail
+│       ├── run_history.py        # per-user run history for auto-period
+│       ├── mcp/                  # MCP infrastructure
 │       │   ├── __init__.py
-│       │   ├── base.py           # ActivitySkill ABC + ActivityItem model
-│       │   ├── jira.py           # Jira skill (REST API → Playwright fallback)
-│       │   ├── slack.py          # Slack skill (Web API → Playwright fallback)
-│       │   ├── github.py         # GitHub skill (REST/GraphQL → Playwright fallback)
-│       │   ├── calendar.py       # Google Calendar skill (API → Playwright fallback)
-│       │   ├── gdrive.py         # Google Drive skill (API → Playwright fallback)
-│       │   └── gmail.py          # Gmail skill (API → Playwright fallback)
+│       │   ├── config.py         # MCPServerConfig + MCPConfig models + server definitions
+│       │   ├── manager.py        # Start/stop MCP server subprocesses
+│       │   ├── registry.py       # Collect + filter tool schemas (read-only allowlist)
+│       │   └── executor.py       # Route tool_use to MCP sessions, Gmail body scrub, safety
 │       └── auth/
 │           ├── __init__.py
-│           ├── google.py         # Google OAuth 2.0 flow + token refresh
-│           └── tokens.py         # API token management for Jira/GitHub/Slack
+│           └── google.py         # Google OAuth 2.0 flow + token refresh
 └── tests/
     ├── __init__.py
-    ├── conftest.py               # shared fixtures: mock clients, sample ActivityItems, date ranges
-    ├── test_agent.py             # orchestrator tests: concurrent dispatch, partial failure, aggregation
-    └── skills/
-        ├── test_jira.py
-        ├── test_slack.py
-        ├── test_github.py
-        ├── test_calendar.py
-        ├── test_gdrive.py
-        └── test_gmail.py
+    ├── conftest.py               # MCP session mocks, Claude tool_use factories, config fixtures
+    ├── test_agent.py             # agent loop tests with staged Claude responses
+    ├── test_config.py            # period parsing tests (preserved)
+    ├── test_report.py            # report formatting tests (preserved)
+    ├── test_run_log.py           # audit log tests
+    ├── test_run_history.py       # run history tests (preserved)
+    ├── test_mcp_manager.py       # MCP server lifecycle tests
+    ├── test_mcp_registry.py      # tool allowlist filtering tests
+    └── test_mcp_executor.py      # tool dispatch + scrubbing tests
 ```
 
-## Skill Model
+## MCP Model
 
-Each data source is a **skill** — a Python module implementing the `ActivitySkill`
-abstract base class. Skills are the only place platform-specific logic lives.
+Each data source is accessed via an **MCP server** — an external process that exposes
+tools over the stdio transport. The agent starts MCP servers as subprocesses,
+collects their tool schemas, filters them through a read-only allowlist, and exposes
+them to Claude's agent loop.
 
-```python
-class ActivitySkill(ABC):
-    @abstractmethod
-    async def fetch_activity(
-        self, user: str, start: datetime, end: datetime
-    ) -> list[ActivityItem]: ...
+### MCP Servers
 
-    @abstractmethod
-    def is_configured(self) -> bool: ...
-```
+| Source | MCP Server | Transport |
+|--------|-----------|-----------|
+| GitHub | `github/github-mcp-server` (official) | stdio |
+| Jira | `sooperset/mcp-atlassian` | stdio |
+| Slack (primary) | `korotovsky/slack-mcp-server` | stdio |
+| Slack (fallback) | Playwright MCP (persisted browser session) | stdio |
+| Google Workspace | `taylorwilsdon/google_workspace_mcp` | stdio |
+| Browser fallback | Playwright MCP server | stdio |
 
-Each skill internally manages its own access method, falling back in priority order:
+### Slack — No Admin Approval Required
 
-1. **Official REST or GraphQL API** — preferred; fastest and most structured
-2. **Authenticated browser scraping via Playwright** — when the API is unavailable
-   or insufficient
-3. **Unauthenticated web scraping** — last resort, only where permitted
+The official Slack MCP is cloud-hosted and requires workspace admin approval. Instead,
+`korotovsky/slack-mcp-server` runs locally via stdio using browser session tokens:
+- **Primary**: browser tokens (`SLACK_MCP_XOXC_TOKEN`, `SLACK_MCP_XOXD_TOKEN`) extracted
+  from Slack web app DevTools. Full `search.messages` access. Re-extract when tokens expire.
+- **Fallback**: Playwright MCP navigates `slack.com` as a logged-in user. One-time login:
+  `python -m status_report.auth.slack --login`. Session persisted to
+  `~/.status-report/playwright-state.json`.
 
-The fallback decision lives entirely inside the skill. The orchestrator does not know
-or care which access method was used.
+### Read-Only Safety (3-Layer Defense)
 
-## Data Sources
-
-### Jira (Atlassian Cloud)
-- **Primary**: Jira Cloud REST API v3 — Basic Auth (email + API token)
-- **Fallback**: Playwright authenticated browser session
-- **Data**: Issues updated/created/transitioned, comments authored, worklogs
-- **Scope**: READ ONLY — `read:jira-work`, `read:jira-user`
-- **Key endpoint**: `/rest/api/3/search` (JQL: `updatedBy = currentUser()`)
-
-### Slack
-- **Primary**: Slack Web API — Bot/User OAuth token
-- **Fallback**: Playwright authenticated browser session
-- **Data**: Messages sent in channels, threads participated in, reactions given
-- **Scope**: READ ONLY — `search:read`, `channels:history`, `channels:read`, `users:read`
-- **Key methods**: `search.messages`, `conversations.history`
-
-### GitHub
-- **Primary**: GitHub REST API v3 / GraphQL v4 — Personal Access Token
-- **Fallback**: Playwright authenticated browser session
-- **Data**: PRs opened/reviewed/merged, commits pushed, code review comments
-- **Scope**: READ ONLY — `repo:read`, `read:org`
-- **Key endpoints**: `/search/issues?q=author:{user}+type:pr`, `/users/{user}/events`
-
-### Google Calendar
-- **Primary**: Google Calendar API v3 — OAuth 2.0 with offline refresh tokens
-- **Fallback**: Playwright authenticated browser session
-- **Data**: Meetings attended, titles, duration, attendee count
-- **Scope**: READ ONLY — `https://www.googleapis.com/auth/calendar.readonly`
-- **Privacy**: Fetch meeting metadata only (title, time, attendees). Never fetch
-  meeting notes, recordings, or attachments unless explicitly opt-in configured.
-
-### Google Drive
-- **Primary**: Google Drive API v3 — OAuth 2.0 (same credentials as Calendar)
-- **Fallback**: Playwright authenticated browser session
-- **Data**: Documents created, modified, viewed (via Drive Activity API)
-- **Scope**: READ ONLY — `drive.metadata.readonly`, `drive.activity.readonly`
-
-### Gmail
-- **Primary**: Gmail API v1 — OAuth 2.0 (same credentials as Calendar and Drive)
-- **Fallback**: Playwright authenticated browser session
-- **Data**: Emails sent, email threads replied to, key received emails acted on
-- **Scope**: READ ONLY — `https://www.googleapis.com/auth/gmail.readonly`
-- **Privacy**: Fetch subject, sender, recipients, timestamp, and action type
-  (sent / replied / key action) only. Email body content MUST NEVER be fetched,
-  stored, or passed to Claude — permanently excluded with no opt-in path.
-
-## Authentication Strategy
-
-Credentials are resolved at skill initialization time and passed as opaque,
-already-authenticated client objects into skill execution. Raw secrets never travel
-past the `auth/` layer.
-
-| Service | Method | Storage |
-|---------|--------|---------|
-| Jira, GitHub, Slack | API token / PAT | `.env` → environment variable |
-| Google Calendar, Drive, Gmail | OAuth 2.0 refresh token | `~/.status-report/google_credentials.json` |
-
-Google OAuth requires a one-time browser-based consent flow on first run; tokens
-refresh automatically thereafter. The token file is mounted into the container via
-a read-only volume — never baked into the image.
+1. **MCP server flags**: Servers configured with read-only environment variables
+   where supported (e.g., `GITHUB_READ_ONLY=1`)
+2. **Tool allowlist filtering**: Registry filters tool schemas — only whitelisted
+   read-only tools are exposed to Claude
+3. **Runtime validation**: Executor validates every tool call against the allowlist
+   before dispatch
 
 ## Processing Flow
 
 ```
-1. Load config → call is_configured() on each skill
-2. Initialize LangFuse trace for the session
-3. asyncio.gather(*[skill.fetch_activity(...) for skill in enabled_skills])
-        │
-        ├── JiraSkill:     REST API  ──(fallback)──► Playwright
-        ├── SlackSkill:    Web API   ──(fallback)──► Playwright
-        ├── GitHubSkill:   REST API  ──(fallback)──► Playwright
-        ├── CalendarSkill: OAuth API ──(fallback)──► Playwright
-        ├── GDriveSkill:   OAuth API ──(fallback)──► Playwright
-        └── GmailSkill:    OAuth API ──(fallback)──► Playwright
-4. Aggregate list[ActivityItem] from all skills into a single structured payload
-5. Call Claude once (Anthropic SDK) with the aggregated payload for synthesis
-6. Claude produces the formatted report:
-   - Summary of key accomplishments
-   - Tickets/issues worked on with status changes
-   - Code contributions (PRs, reviews)
-   - Meetings and collaboration
-   - Documents produced or consumed
-   - Email activity (sent, replied to, key threads)
-   - Suggested follow-ups or open items
-7. Output the formatted report
+1. Load config → determine which MCP servers have credentials
+2. Start MCP server subprocesses (async context managers)
+3. Collect tool schemas from all servers → filter through read-only allowlist
+4. Launch Claude agent loop:
+   ├── Claude receives system prompt + user request (period, sources)
+   ├── Claude calls MCP tools (search, get details, follow threads)
+   │   ├── Executor validates tool against allowlist
+   │   ├── Executor routes to correct MCP session
+   │   ├── Gmail results scrubbed (body removed)
+   │   └── Tool result returned to Claude
+   ├── Claude receives results, decides next action
+   ├── Claude drills into significant items for rich detail
+   ├── Turn counter incremented; safety limit checked
+   └── Claude produces stop_reason="end_turn" with final report
+5. Parse Claude's final message → Report with sections
+6. Write RunTrace audit log
+7. Record run history
+8. Output formatted report to stdout
+9. Shutdown MCP servers
 ```
 
 ## Claude's Role
 
-Claude is invoked **exactly once per report run**, strictly for synthesis and
-summarization. Claude receives structured `ActivityItem` data and produces the
-final report. Claude does not decide which skills to run, which endpoints to call,
-or which access method to use — all of that is deterministic Python.
+Claude is the **autonomous agent**. It is NOT a formatter that receives pre-collected
+data. Claude IS the brain — it explores, investigates, and reports. The agent loop
+continues until Claude decides it has enough context (stop_reason="end_turn"), or until
+the turn limit is reached.
 
 ## Agent CLI
 
@@ -192,32 +139,20 @@ python -m status_report.main \
   --format markdown               # text | markdown | json
 ```
 
-## LangFuse Integration
-
-- **Tracing**: Every agent run creates a top-level trace; each skill execution and
-  the Claude synthesis call are separate child spans
-- **Prompt management**: The synthesis system prompt lives in the LangFuse prompt
-  registry — not hardcoded in source files
-- **Cost tracking**: Claude API token usage tracked per report run
-- **Evaluation**: Log report quality scores if user feedback is provided
-- Use the `langfuse` Python SDK with the `@observe` decorator for automatic span
-  creation. Spans MUST NEVER include raw tokens, passwords, or OAuth credentials.
-
 ## Code Conventions
 
-- `async/await` for all I/O — `httpx.AsyncClient` for HTTP, Playwright async API
-  for browser automation
+- `async/await` for all I/O — MCP lifecycle, Claude API calls, tool dispatch
 - Type hints on all function signatures
-- Pydantic models for `ActivityItem`, configuration, and API response schemas
-- Each skill implements `ActivitySkill` (see Skill Model above)
-- `structlog` for application logging (separate from LangFuse tracing)
-- Tests: `pytest` + `pytest-asyncio`; mock all HTTP with `respx`, mock Playwright,
-  mock Anthropic SDK; no live API calls in the test suite
+- Pydantic models for configuration, MCP server configs, and RunTrace
+- `structlog` for application logging
+- Tests: `pytest` + `pytest-asyncio`; mock MCP sessions + Claude tool_use responses;
+  no live API calls or MCP servers in tests
 
 ## Container
 
 The agent runs as a standalone container. The image includes Python dependencies,
-Playwright, and Chromium for skill browser-fallback paths.
+Node.js (for npm-based MCP servers), Playwright + Chromium (for browser-fallback MCP
+server), and the agent CLI.
 
 ```bash
 # Build
@@ -236,21 +171,25 @@ variables or the read-only volume mount — nothing is baked into the image.
 ## Environment Variables
 
 ```
-# Anthropic
-ANTHROPIC_API_KEY=
+# Vertex AI (Claude) — authentication via Google ADC, no API key needed
+VERTEX_PROJECT_ID=your-gcp-project-id
+VERTEX_REGION=us-east5
+CLAUDE_MODEL=claude-sonnet-4-6
 
-# LangFuse
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-LANGFUSE_HOST=https://cloud.langfuse.com
+# Agent limits
+MAX_AGENT_TURNS=50
 
 # Jira
 JIRA_BASE_URL=https://yourorg.atlassian.net
 JIRA_USER_EMAIL=
 JIRA_API_TOKEN=
 
-# Slack
-SLACK_BOT_TOKEN=xoxb-...
+# Slack (primary — browser session tokens, no admin approval needed)
+# Extract from Slack web app DevTools (see docs/user-guide.md#slack-setup)
+SLACK_MCP_XOXC_TOKEN=xoxc-...
+SLACK_MCP_XOXD_TOKEN=xoxd-...
+# Fallback: Playwright browser session (run: python -m status_report.auth.slack --login)
+# Session stored at ~/.status-report/playwright-state.json
 
 # GitHub
 GITHUB_TOKEN=ghp_...
@@ -263,39 +202,40 @@ GOOGLE_PROJECT_ID=
 
 ## Security Rules
 
-- **READ ONLY**: No skill may issue any write operation. All HTTP calls MUST be GET
-  or read-equivalent. Enforced at OAuth scope level AND code level (`skills/` and
-  `auth/`).
+- **READ ONLY**: 3-layer defense — MCP server flags, tool allowlist filtering,
+  runtime validation. No write tools exposed to Claude.
 - **No secrets in code**: All credentials from environment variables or
   `~/.status-report/`. Never hardcode.
-- **No secrets in traces**: LangFuse spans must never include raw tokens, passwords,
+- **No secrets in logs**: Structured log output must never include raw tokens, passwords,
   or OAuth credentials.
-- **Minimal scopes**: Request the absolute minimum read-only permissions per platform.
+- **MCP credential isolation**: Credentials passed as env vars to MCP server
+  subprocesses. Never flow through Claude's context.
+- **Gmail body scrub**: Executor removes email body content from Gmail tool results
+  before they reach Claude. Permanent, no opt-in.
 - **`.env` in `.gitignore`**: Always.
-- **Secret scanning**: CI includes a secrets scanner on every PR.
 
 ## Error Handling
 
-- If a skill's credentials are missing (`is_configured()` returns `False`), skip that
-  skill, log a warning via `structlog`, and include a note in the report
-- If a skill's primary API path fails, it falls back to Playwright automatically;
-  fallback usage is logged at `warning` level and recorded as a LangFuse span attribute
-- If all access methods are exhausted, the skill returns a structured error; the
-  orchestrator includes a note in the report and continues
-- Surface rate-limit errors with retry-after guidance; never swallow silently
+- Claude handles tool errors directly — it decides whether to retry, skip, or try
+  an alternative approach
+- If an MCP server fails to start, its tools are excluded and Claude is informed
+- Turn limit (`max_agent_turns`) prevents runaway loops
+- If no MCP servers start successfully, exit with code 2
 - Never forward raw exception tracebacks to Claude
 
-## Future Considerations (do not implement now)
-
-- Scheduled runs via cron or cloud scheduler
-- Team-level aggregate reports
-- Slack bot interface for requesting reports
-- Email delivery of reports
-- Confluence/Notion as additional sources
-
 ## Active Technologies
-- Python 3.12+ + anthropic, httpx, playwright, langfuse, tenacity, filelock, (001-status-report-agent)
-- `~/.status-report/google_credentials.json` (Google OAuth tokens), (001-status-report-agent)
+- Python 3.12+ + anthropic[vertex], mcp, tenacity, filelock, structlog, pydantic
+- Claude via Vertex AI (`AnthropicVertex` client, Google ADC authentication)
+- MCP servers: `github/github-mcp-server`, `sooperset/mcp-atlassian`,
+  `korotovsky/slack-mcp-server`, `taylorwilsdon/google_workspace_mcp`, Playwright MCP
+- `~/.status-report/google_credentials.json` (Google OAuth tokens for Google Workspace MCP)
+- `~/.status-report/playwright-state.json` (Playwright browser session for Slack fallback)
+- JSONL file at `~/.status-report/run_history.log` + `.lock` sidecar
 
 ## Recent Changes
-- 001-status-report-agent: Added Python 3.12+ + anthropic, httpx, playwright, langfuse, tenacity, filelock,
+- Migrated from Python-orchestrated skill architecture to MCP-based agentic sub-agent system
+- Claude is now the autonomous agent (drives data collection via MCP tools)
+- Slack: uses `korotovsky/slack-mcp-server` with browser session tokens (no admin approval)
+- Slack fallback: Playwright MCP with persisted browser session
+- Removed: skills/ directory, httpx direct calls, google-api-python-client
+- Added: mcp/ package, MCP server configs, tool allowlist, agent loop

@@ -1,8 +1,11 @@
 FROM python:3.12-slim
 
-# Install curl (used by uv installer) and clean up apt cache
+# Install curl (for uv installer) and Node.js (for MCP servers)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -15,17 +18,24 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY src/ src/
 
-# Install dependencies (no dev deps in container)
+# Install Python dependencies (no dev deps in container)
 RUN uv sync --no-dev
 
 # Expose venv Python on PATH so "python" resolves without "uv run"
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Pre-install MCP server npm packages for faster startup
+RUN npm install -g \
+    @modelcontextprotocol/server-github \
+    @modelcontextprotocol/server-slack \
+    @sooperset/mcp-atlassian \
+    @playwright/mcp
+
 # Store Playwright browsers under /app so the non-root user can access them
 ENV PLAYWRIGHT_BROWSERS_PATH="/app/pw-browsers"
 
 # Install Playwright + Chromium system deps (must run as root for apt)
-RUN playwright install --with-deps chromium
+RUN npx playwright install --with-deps chromium
 
 # Create non-root user and transfer ownership of /app
 RUN useradd -m appuser && chown -R appuser:appuser /app
