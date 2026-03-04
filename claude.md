@@ -72,11 +72,22 @@ them to Claude's agent loop.
 
 | Source | MCP Server | Transport |
 |--------|-----------|-----------|
-| GitHub | `@modelcontextprotocol/server-github` | stdio |
-| Jira | `@sooperset/mcp-atlassian` | stdio |
-| Slack | `@modelcontextprotocol/server-slack` | stdio |
-| Google Workspace | `@anthropic/google-workspace-mcp` | stdio |
-| Browser fallback | `@playwright/mcp` | stdio |
+| GitHub | `github/github-mcp-server` (official) | stdio |
+| Jira | `sooperset/mcp-atlassian` | stdio |
+| Slack (primary) | `korotovsky/slack-mcp-server` | stdio |
+| Slack (fallback) | Playwright MCP (persisted browser session) | stdio |
+| Google Workspace | `taylorwilsdon/google_workspace_mcp` | stdio |
+| Browser fallback | Playwright MCP server | stdio |
+
+### Slack — No Admin Approval Required
+
+The official Slack MCP is cloud-hosted and requires workspace admin approval. Instead,
+`korotovsky/slack-mcp-server` runs locally via stdio using browser session tokens:
+- **Primary**: browser tokens (`SLACK_MCP_XOXC_TOKEN`, `SLACK_MCP_XOXD_TOKEN`) extracted
+  from Slack web app DevTools. Full `search.messages` access. Re-extract when tokens expire.
+- **Fallback**: Playwright MCP navigates `slack.com` as a logged-in user. One-time login:
+  `python -m status_report.auth.slack --login`. Session persisted to
+  `~/.status-report/playwright-state.json`.
 
 ### Read-Only Safety (3-Layer Defense)
 
@@ -173,8 +184,12 @@ JIRA_BASE_URL=https://yourorg.atlassian.net
 JIRA_USER_EMAIL=
 JIRA_API_TOKEN=
 
-# Slack
-SLACK_BOT_TOKEN=xoxb-...
+# Slack (primary — browser session tokens, no admin approval needed)
+# Extract from Slack web app DevTools (see docs/user-guide.md#slack-setup)
+SLACK_MCP_XOXC_TOKEN=xoxc-...
+SLACK_MCP_XOXD_TOKEN=xoxd-...
+# Fallback: Playwright browser session (run: python -m status_report.auth.slack --login)
+# Session stored at ~/.status-report/playwright-state.json
 
 # GitHub
 GITHUB_TOKEN=ghp_...
@@ -211,12 +226,16 @@ GOOGLE_PROJECT_ID=
 ## Active Technologies
 - Python 3.12+ + anthropic[vertex], mcp, tenacity, filelock, structlog, pydantic
 - Claude via Vertex AI (`AnthropicVertex` client, Google ADC authentication)
-- MCP servers: GitHub, Jira, Slack, Google Workspace, Playwright (browser fallback)
-- `~/.status-report/google_credentials.json` (Google OAuth tokens)
+- MCP servers: `github/github-mcp-server`, `sooperset/mcp-atlassian`,
+  `korotovsky/slack-mcp-server`, `taylorwilsdon/google_workspace_mcp`, Playwright MCP
+- `~/.status-report/google_credentials.json` (Google OAuth tokens for Google Workspace MCP)
+- `~/.status-report/playwright-state.json` (Playwright browser session for Slack fallback)
 - JSONL file at `~/.status-report/run_history.log` + `.lock` sidecar
 
 ## Recent Changes
 - Migrated from Python-orchestrated skill architecture to MCP-based agentic sub-agent system
 - Claude is now the autonomous agent (drives data collection via MCP tools)
+- Slack: uses `korotovsky/slack-mcp-server` with browser session tokens (no admin approval)
+- Slack fallback: Playwright MCP with persisted browser session
 - Removed: skills/ directory, httpx direct calls, google-api-python-client
 - Added: mcp/ package, MCP server configs, tool allowlist, agent loop

@@ -26,11 +26,29 @@ Python wrapper → start MCP servers → Claude agent loop:
 
 | Source | MCP Server | Transport |
 |--------|-----------|-----------|
-| GitHub | `@modelcontextprotocol/server-github` | stdio |
-| Jira | `@sooperset/mcp-atlassian` | stdio |
-| Slack | `@modelcontextprotocol/server-slack` | stdio |
-| Google Workspace | `@anthropic/google-workspace-mcp` | stdio |
-| Browser fallback | `@playwright/mcp` | stdio |
+| GitHub | `github/github-mcp-server` (official) | stdio |
+| Jira | `sooperset/mcp-atlassian` | stdio |
+| Slack (primary) | `korotovsky/slack-mcp-server` | stdio |
+| Slack (fallback) | Playwright MCP (browser session) | stdio |
+| Google Workspace | `taylorwilsdon/google_workspace_mcp` | stdio |
+| Browser fallback | Playwright MCP server | stdio |
+
+### Slack Authentication (no admin approval required)
+
+The official Slack MCP server requires workspace admin approval and is cloud-hosted
+(HTTP transport only) — incompatible with this architecture. Instead:
+
+**Primary**: `korotovsky/slack-mcp-server` with browser session tokens extracted from
+the Slack web app (no app registration or admin involvement):
+- `SLACK_MCP_XOXC_TOKEN`: extracted from `localStorage` in browser DevTools
+- `SLACK_MCP_XOXD_TOKEN`: extracted from the `d` cookie in browser DevTools
+- Provides full `search.messages` access for finding the user's activity
+- Tokens expire on browser logout; must be re-extracted periodically
+
+**Fallback**: Playwright MCP server navigates `slack.com` as a logged-in user.
+- Requires a one-time interactive login: `python -m status_report.auth.slack --login`
+- Session state persisted to `~/.status-report/playwright-state.json`
+- Reused on subsequent runs; requires re-login when Slack session expires
 
 ## Constitution Check (v4.0.0)
 

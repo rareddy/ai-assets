@@ -367,13 +367,97 @@ Create an API token at [id.atlassian.com/manage-profile/security/api-tokens](htt
 
 ### Slack
 
-**MCP Server**: `@modelcontextprotocol/server-slack`
+**MCP Server**: [`korotovsky/slack-mcp-server`](https://github.com/korotovsky/slack-mcp-server) (stdio)
 
-**What Claude can do**: List channels, read channel history, get thread replies, search messages, list users.
+**What Claude can do**: Search your messages by date range, read channel history, get thread context, look up user info.
 
-**Credentials needed**: `SLACK_BOT_TOKEN`
+**Why not the official Slack MCP?** The official Slack MCP server is cloud-hosted (HTTP transport only) and requires workspace admin approval. This project uses `korotovsky/slack-mcp-server` instead — it runs locally via stdio and requires no app registration or admin involvement.
 
-Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps). Required scopes: `search:read`, `channels:history`, `channels:read`, `users:read`.
+**Credentials needed**: `SLACK_MCP_XOXC_TOKEN`, `SLACK_MCP_XOXD_TOKEN` (browser session tokens)
+
+These are extracted directly from your logged-in Slack web session. There are two ways to get them:
+
+---
+
+#### Option A — Automated (recommended)
+
+A one-time script opens Slack in a browser, waits for you to log in, then extracts both tokens automatically. It also saves your browser session for the Playwright MCP fallback.
+
+```bash
+# First-time setup or token refresh
+uv run python -m status_report.auth.slack --extract
+```
+
+What happens:
+1. A Chromium browser opens and navigates to `app.slack.com`
+2. If you're not already logged in, sign into your workspace as normal
+3. Press Enter in the terminal when you can see your messages
+4. The script extracts your `xoxc` and `xoxd` tokens automatically
+5. Tokens are printed for you to add to `.env`, and also saved to `~/.status-report/slack_tokens.json`
+6. Your browser session is saved to `~/.status-report/playwright-state.json` (used by the Playwright MCP fallback)
+
+Add the printed tokens to `.env`:
+
+```env
+SLACK_MCP_XOXC_TOKEN=xoxc-...
+SLACK_MCP_XOXD_TOKEN=xoxd-...
+```
+
+---
+
+#### Option B — Manual (DevTools)
+
+If you prefer not to run the script:
+
+1. Open [app.slack.com](https://app.slack.com) in your browser and log in
+2. Open DevTools (F12 or Cmd+Option+I)
+
+**Get `SLACK_MCP_XOXC_TOKEN`:**
+
+3. Go to the **Console** tab
+4. If prompted, type `allow pasting` and press Enter
+5. Paste and run:
+   ```js
+   JSON.parse(localStorage.localConfig_v2).teams[document.location.pathname.match(/\/client\/([A-Z0-9]+)/)[1]].token
+   ```
+6. Copy the value starting with `xoxc-`
+
+**Get `SLACK_MCP_XOXD_TOKEN`:**
+
+7. Go to the **Application** tab → **Cookies** → `https://app.slack.com`
+8. Find the cookie named `d`
+9. Double-click its value and copy it
+
+Add both to `.env`:
+```env
+SLACK_MCP_XOXC_TOKEN=xoxc-...
+SLACK_MCP_XOXD_TOKEN=xoxd-...
+```
+
+---
+
+#### When to refresh
+
+These tokens are your Slack browser session — they expire when Slack logs you out (typically after weeks of inactivity or when you explicitly sign out). Signs your tokens have expired:
+
+- The agent reports a Slack authentication error
+- Claude falls back to the Playwright MCP for Slack
+
+To refresh, run the automated script again (`--extract`) or repeat the manual steps.
+
+---
+
+#### Playwright MCP fallback for Slack
+
+If the primary Slack MCP fails (expired tokens, connection error), the Playwright MCP server automatically takes over, navigating `slack.com` in a browser as a logged-in user. It uses the session saved at `~/.status-report/playwright-state.json`.
+
+To set up the Playwright fallback without extracting tokens (e.g., if you only want the browser fallback):
+
+```bash
+uv run python -m status_report.auth.slack --login
+```
+
+This opens Slack in a browser, waits for login, saves the session, and exits. **Note**: The Playwright fallback also requires an active Slack session — it will not work if `playwright-state.json` is missing or expired. Re-run `--login` (or `--extract`) to refresh it.
 
 ---
 

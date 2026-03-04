@@ -107,8 +107,13 @@ any unavailable sources.
 - **FR-010**: No credentials, tokens, or raw tracebacks in the report or user output.
 - **FR-010a**: Gmail body content MUST be scrubbed from tool results by the executor
   before reaching Claude. Permanent, no opt-in.
-- **FR-011**: MCP servers provide tool access. Browser fallback via Playwright MCP server
-  when native servers are unavailable.
+- **FR-011**: MCP servers provide tool access. For Slack, the primary integration uses
+  `korotovsky/slack-mcp-server` with browser-extracted session tokens (`xoxc-` + `xoxd-`
+  cookie) — no workspace admin approval required. Browser fallback via Playwright MCP
+  server (with persisted browser session) when the primary Slack MCP is unavailable or
+  tokens are expired. Playwright MCP requires a one-time interactive login to establish
+  the session; the session state is persisted to `~/.status-report/playwright-state.json`
+  for reuse.
 - **FR-012**: Every run MUST produce a RunTrace audit entry capturing: MCP servers
   started, tool calls count, agent turns, total tokens, outcome, skipped sources,
   and duration.
