@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -49,15 +50,20 @@ def build_mcp_configs(env: dict[str, Optional[str]]) -> list[MCPServerConfig]:
     """
     configs: list[MCPServerConfig] = []
 
-    # GitHub
+    # GitHub — official Go-based MCP server (ghcr.io/github/github-mcp-server)
     github_token = _env_or_none("GITHUB_TOKEN", env)
     if github_token:
         configs.append(
             MCPServerConfig(
                 name="github",
-                command="npx",
-                args=["-y", "@modelcontextprotocol/server-github"],
-                env={"GITHUB_PERSONAL_ACCESS_TOKEN": github_token},
+                command="docker",
+                args=[
+                    "run", "-i", "--rm",
+                    "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+                    "-e", "GITHUB_READ_ONLY",
+                    "ghcr.io/github/github-mcp-server",
+                ],
+                env={"GITHUB_PERSONAL_ACCESS_TOKEN": github_token, "GITHUB_READ_ONLY": "1"},
                 read_only_tools=[
                     "search_repositories",
                     "get_file_contents",
@@ -104,42 +110,75 @@ def build_mcp_configs(env: dict[str, Optional[str]]) -> list[MCPServerConfig]:
             )
         )
 
-    # Slack
-    slack_token = _env_or_none("SLACK_BOT_TOKEN", env)
-    if slack_token:
+    # Slack primary — korotovsky/slack-mcp-server with browser session tokens
+    # No workspace admin approval required; tokens extracted from Slack web app.
+    # See: docs/user-guide.md#slack-setup or run: python -m status_report.auth.slack --extract
+    xoxc_token = _env_or_none("SLACK_MCP_XOXC_TOKEN", env)
+    xoxd_token = _env_or_none("SLACK_MCP_XOXD_TOKEN", env)
+    if xoxc_token and xoxd_token:
         configs.append(
             MCPServerConfig(
                 name="slack",
-                command="npx",
-                args=["-y", "@modelcontextprotocol/server-slack"],
-                env={"SLACK_BOT_TOKEN": slack_token},
+                command="docker",
+                args=[
+                    "run", "-i", "--rm",
+                    "-e", "SLACK_MCP_XOXC_TOKEN",
+                    "-e", "SLACK_MCP_XOXD_TOKEN",
+                    "ghcr.io/korotovsky/slack-mcp-server:latest",
+                ],
+                env={"SLACK_MCP_XOXC_TOKEN": xoxc_token, "SLACK_MCP_XOXD_TOKEN": xoxd_token},
                 read_only_tools=[
-                    "slack_list_channels",
-                    "slack_get_channel_history",
-                    "slack_get_thread_replies",
-                    "slack_get_users",
-                    "slack_search_messages",
+                    "conversations_history",
+                    "conversations_replies",
+                    "conversations_search_messages",
+                    "channels_list",
+                    "users_search",
+                    "usergroups_list",
+                    "usergroups_me",
+                    "conversations_unreads",
                 ],
                 source_label="slack",
             )
         )
 
-    # Google Workspace (Calendar, Drive, Gmail)
+    # Slack fallback — Playwright MCP with persisted browser session
+    # Active when ~/.status-report/playwright-state.json exists (created by --login or --extract).
+    _slack_state = Path.home() / ".status-report" / "playwright-state.json"
+    if _slack_state.exists():
+        configs.append(
+            MCPServerConfig(
+                name="slack_browser",
+                command="npx",
+                args=["-y", "@playwright/mcp@latest", "--storage-state", str(_slack_state)],
+                env={},
+                read_only_tools=[
+                    "browser_navigate",
+                    "browser_snapshot",
+                    "browser_click",
+                    "browser_type",
+                    "browser_wait",
+                ],
+                source_label="slack",
+            )
+        )
+
+    # Google Workspace (Calendar, Drive, Gmail) — taylorwilsdon/google_workspace_mcp
+    # Run via uvx (no install step needed; fetched on first use).
     google_client_id = _env_or_none("GOOGLE_CLIENT_ID", env)
     google_client_secret = _env_or_none("GOOGLE_CLIENT_SECRET", env)
-    google_project_id = _env_or_none("GOOGLE_PROJECT_ID", env)
     if google_client_id and google_client_secret:
+        # Map user-facing env var names to the names workspace-mcp expects
         google_env: dict[str, str] = {
-            "GOOGLE_CLIENT_ID": google_client_id,
-            "GOOGLE_CLIENT_SECRET": google_client_secret,
+            "GOOGLE_OAUTH_CLIENT_ID": google_client_id,
+            "GOOGLE_OAUTH_CLIENT_SECRET": google_client_secret,
         }
-        if google_project_id:
-            google_env["GOOGLE_PROJECT_ID"] = google_project_id
+        if google_project_id := _env_or_none("GOOGLE_PROJECT_ID", env):
+            google_env["GOOGLE_CLOUD_PROJECT"] = google_project_id
         configs.append(
             MCPServerConfig(
                 name="google_workspace",
-                command="npx",
-                args=["-y", "@anthropic/google-workspace-mcp"],
+                command="uvx",
+                args=["workspace-mcp", "--read-only"],
                 env=google_env,
                 read_only_tools=[
                     "calendar_list_events",

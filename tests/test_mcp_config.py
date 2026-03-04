@@ -51,12 +51,27 @@ class TestBuildMCPConfigs:
         assert len(jira) == 1
 
     def test_slack_config(self):
-        """Slack config is created when SLACK_BOT_TOKEN is set."""
-        configs = build_mcp_configs({"SLACK_BOT_TOKEN": "xoxb-test"})
+        """Slack config is created when both SLACK_MCP_XOXC_TOKEN and SLACK_MCP_XOXD_TOKEN are set."""
+        configs = build_mcp_configs({
+            "SLACK_MCP_XOXC_TOKEN": "xoxc-test",
+            "SLACK_MCP_XOXD_TOKEN": "xoxd-test",
+        })
 
         slack = [c for c in configs if c.name == "slack"]
         assert len(slack) == 1
         assert slack[0].source_label == "slack"
+        assert "SLACK_MCP_XOXC_TOKEN" in slack[0].env
+        assert "SLACK_MCP_XOXD_TOKEN" in slack[0].env
+
+    def test_slack_config_requires_both_tokens(self):
+        """Slack config requires both xoxc and xoxd tokens."""
+        configs = build_mcp_configs({"SLACK_MCP_XOXC_TOKEN": "xoxc-test"})
+        slack = [c for c in configs if c.name == "slack"]
+        assert len(slack) == 0
+
+        configs = build_mcp_configs({"SLACK_MCP_XOXD_TOKEN": "xoxd-test"})
+        slack = [c for c in configs if c.name == "slack"]
+        assert len(slack) == 0
 
     def test_google_workspace_config(self):
         """Google Workspace config requires client ID and secret."""
@@ -69,7 +84,10 @@ class TestBuildMCPConfigs:
         google = [c for c in configs if c.name == "google_workspace"]
         assert len(google) == 1
         assert "gmail_get_message" in google[0].read_only_tools
-        assert "GOOGLE_PROJECT_ID" in google[0].env
+        # Env vars are remapped to names that workspace-mcp expects
+        assert "GOOGLE_OAUTH_CLIENT_ID" in google[0].env
+        assert "GOOGLE_OAUTH_CLIENT_SECRET" in google[0].env
+        assert "GOOGLE_CLOUD_PROJECT" in google[0].env
 
     def test_google_workspace_without_project_id(self):
         """Google Workspace config works without GOOGLE_PROJECT_ID."""
@@ -80,7 +98,7 @@ class TestBuildMCPConfigs:
 
         google = [c for c in configs if c.name == "google_workspace"]
         assert len(google) == 1
-        assert "GOOGLE_PROJECT_ID" not in google[0].env
+        assert "GOOGLE_CLOUD_PROJECT" not in google[0].env
 
     def test_playwright_always_included(self):
         """Playwright browser fallback is always included."""
@@ -97,7 +115,8 @@ class TestBuildMCPConfigs:
             "JIRA_BASE_URL": "https://test.atlassian.net",
             "JIRA_USER_EMAIL": "test@example.com",
             "JIRA_API_TOKEN": "tok_123",
-            "SLACK_BOT_TOKEN": "xoxb-test",
+            "SLACK_MCP_XOXC_TOKEN": "xoxc-test",
+            "SLACK_MCP_XOXD_TOKEN": "xoxd-test",
             "GOOGLE_CLIENT_ID": "client-id",
             "GOOGLE_CLIENT_SECRET": "secret",
         })
@@ -120,7 +139,8 @@ class TestFilterConfigsBySources:
         """None requested_sources returns all configs."""
         configs = build_mcp_configs({
             "GITHUB_TOKEN": "ghp_test",
-            "SLACK_BOT_TOKEN": "xoxb-test",
+            "SLACK_MCP_XOXC_TOKEN": "xoxc-test",
+            "SLACK_MCP_XOXD_TOKEN": "xoxd-test",
         })
         filtered, not_found = filter_configs_by_sources(configs, None)
 
@@ -131,7 +151,8 @@ class TestFilterConfigsBySources:
         """Only configs matching requested source labels are returned."""
         configs = build_mcp_configs({
             "GITHUB_TOKEN": "ghp_test",
-            "SLACK_BOT_TOKEN": "xoxb-test",
+            "SLACK_MCP_XOXC_TOKEN": "xoxc-test",
+            "SLACK_MCP_XOXD_TOKEN": "xoxd-test",
         })
         filtered, not_found = filter_configs_by_sources(configs, ["github"])
 
