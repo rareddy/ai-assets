@@ -12,10 +12,13 @@ gcloud auth application-default login
 cp .env.example .env   # set VERTEX_PROJECT_ID and any data-source credentials
 uv sync
 
-# 3. One-time Google OAuth consent (if using Calendar / Drive / Gmail)
+# 3. One-time Slack setup — extract browser session tokens (no admin approval needed)
+uv run python -m status_report.auth.slack --extract
+
+# 4. One-time Google OAuth consent (if using Calendar / Drive / Gmail)
 uv run python -m status_report.auth.google --consent
 
-# 4. Generate your first report
+# 5. Generate your first report
 python -m status_report.main --user you@example.com
 ```
 
@@ -45,7 +48,7 @@ Python wrapper → start MCP servers → Claude agent loop:
 
 ## Installation
 
-**Requirements**: Python 3.12+, [`uv`](https://docs.astral.sh/uv/), and Node.js 20+ (for MCP servers)
+**Requirements**: Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Node.js 20+ (for npm-based MCP servers), and Docker (for GitHub and Slack MCP servers)
 
 ```bash
 git clone <repo-url> status-report
@@ -91,12 +94,14 @@ Each data source is accessed via an MCP server that starts as a subprocess. Cred
 
 | Variable(s) | Source | MCP Server |
 |-------------|--------|-----------|
-| `GITHUB_TOKEN` | GitHub | `@modelcontextprotocol/server-github` |
-| `JIRA_BASE_URL` + `JIRA_USER_EMAIL` + `JIRA_API_TOKEN` | Jira Cloud | `@sooperset/mcp-atlassian` |
-| `SLACK_BOT_TOKEN` | Slack | `@modelcontextprotocol/server-slack` |
-| `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` + `GOOGLE_PROJECT_ID` | Calendar, Drive, Gmail | `@anthropic/google-workspace-mcp` |
+| `GITHUB_TOKEN` | GitHub | `ghcr.io/github/github-mcp-server` (official Go binary, run via Docker) |
+| `JIRA_BASE_URL` + `JIRA_USER_EMAIL` + `JIRA_API_TOKEN` | Jira Cloud | `@sooperset/mcp-atlassian` (npm) |
+| `SLACK_MCP_XOXC_TOKEN` + `SLACK_MCP_XOXD_TOKEN` | Slack | `ghcr.io/korotovsky/slack-mcp-server` (Docker) — no admin approval needed |
+| `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` | Calendar, Drive, Gmail | `workspace-mcp` (run via `uvx`) |
 
-A Playwright browser fallback MCP server (`@playwright/mcp`) is always available for when native MCP servers are unconfigured.
+**Slack tokens** are browser session tokens extracted automatically from the Slack web app — no app registration or workspace admin approval required. Run `uv run python -m status_report.auth.slack --extract` to set them up.
+
+A Playwright browser fallback MCP server is always available; it doubles as a Slack fallback when `~/.status-report/playwright-state.json` exists (created by `uv run python -m status_report.auth.slack --login`).
 
 ### Optional
 
@@ -261,7 +266,9 @@ src/status_report/
 │   ├── manager.py    # Server subprocess lifecycle
 │   ├── registry.py   # Tool allowlist filtering
 │   └── executor.py   # Tool dispatch + Gmail body scrubbing
-└── auth/             # Google OAuth consent flow
+└── auth/
+    ├── google.py     # Google OAuth consent flow + token refresh
+    └── slack.py      # Playwright-based Slack token extractor + browser session login
 ```
 
 ---
@@ -278,5 +285,5 @@ src/status_report/
 - **MCP credential isolation**: Credentials are passed as env vars to MCP server subprocesses. They never flow through Claude's context, tool arguments, or tool results.
 - **Gmail body scrub**: The executor removes email body content from Gmail tool results before they reach Claude. Permanent, no opt-in.
 - **No secrets in logs**: All credentials are excluded from structlog output and RunTrace audit entries.
-- **Local token storage**: Google OAuth tokens are stored in `~/.status-report/google_credentials.json` (permissions 600).
+- **Local token storage**: Google OAuth tokens are stored in `~/.status-report/google_credentials.json` and Slack browser tokens in `~/.status-report/slack_tokens.json` (both permissions 600, directory 700).
 - **`.env` is git-ignored** — never commit it.
