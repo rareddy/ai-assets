@@ -52,21 +52,25 @@ Focus EXCLUSIVELY on things the user did themselves:
 
 ## Your Process
 
-1. **Discover personal repos first**: The user message includes a GitHub username.
-   Begin by calling `search_repositories` with `user:USERNAME` to find the user's
-   personal repositories. Then call `list_commits`, `list_pull_requests`, and
-   `list_issues` on each personal repo to find activity in the period.
-   **Do this before searching any organisation repos.**
+1. **Identify the GitHub user first**: If GitHub tools are available, call `get_me`
+   as your very first tool call. This returns the authenticated GitHub login (e.g.
+   `rareddy`) — use it for every subsequent filter and search. Do NOT guess the
+   username from the email address.
 
-2. **Search authored activity broadly**: After personal repos, search with
-   `author:USERNAME`, `committer:USERNAME`, `commenter:USERNAME` filters across all
-   accessible repos. Do NOT use `involves:USERNAME` or `review-requested:USERNAME`.
+2. **Discover personal repos**: Call `search_repositories` with `user:LOGIN` to find
+   the user's personal repositories. Then call `list_commits`, `list_pull_requests`,
+   and `list_issues` on each repo scoped to the period.
+   **Check personal repos before any organisation repos.**
 
-3. **Investigate**: For each authored PR, commit, or issue found — drill deeper. Read
+3. **Search authored activity broadly**: After personal repos, search with
+   `author:LOGIN`, `committer:LOGIN`, `commenter:LOGIN` filters across all accessible
+   repos. Do NOT use `involves:LOGIN` or `review-requested:LOGIN`.
+
+4. **Investigate**: For each authored PR, commit, or issue found — drill deeper. Read
    the PR diff and description (`get_pull_request_diff`, `get_pull_request`), the
    commit message, the issue body and comments. Understand WHAT changed and WHY.
 
-4. **Report**: Write rich, detailed descriptions of each contribution. Include: what was
+5. **Report**: Write rich, detailed descriptions of each contribution. Include: what was
    changed, why it was important, the outcome (merged/open/closed), and key context.
 
 ## Report Sections (include only sections with data)
@@ -94,30 +98,18 @@ Focus EXCLUSIVELY on things the user did themselves:
 """
 
 
-def _github_username(user: str) -> str:
-    """Derive a likely GitHub username from a user identifier.
-
-    If 'user' looks like an email, returns the local part (before @).
-    Otherwise returns 'user' as-is (it may already be a username).
-    """
-    return user.split("@")[0] if "@" in user else user
-
-
 def _build_user_message(user: str, period: ReportPeriod, available_sources: list[str]) -> str:
     """Build the initial user message for the agent loop."""
     period_label = period.label or f"{period.start.date()} to {period.end.date()}"
     sources_str = ", ".join(available_sources) if available_sources else "all configured"
-    gh_username = _github_username(user)
 
     return (
         f"Generate a status report for user '{user}' covering the period: {period_label}.\n\n"
         f"Available data sources: {sources_str}\n"
-        f"Time range: {period.start.isoformat()} to {period.end.isoformat()}\n"
-        f"GitHub username: {gh_username} (use this for author:, committer:, commenter: filters "
-        f"and to list personal repos at user:{gh_username})\n\n"
-        f"Start by checking personal repositories at user:{gh_username} first, "
-        f"then search broader organisations. Investigate my own contributions in depth "
-        f"and write a detailed status report."
+        f"Time range: {period.start.isoformat()} to {period.end.isoformat()}\n\n"
+        f"If GitHub tools are available, call get_me first to discover the authenticated "
+        f"GitHub username, then use that username for all searches. "
+        f"Investigate my own contributions in depth and write a detailed status report."
     )
 
 

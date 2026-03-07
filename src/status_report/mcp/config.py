@@ -65,6 +65,7 @@ def build_mcp_configs(env: dict[str, Optional[str]]) -> list[MCPServerConfig]:
                 ],
                 env={"GITHUB_PERSONAL_ACCESS_TOKEN": github_token, "GITHUB_READ_ONLY": "1"},
                 read_only_tools=[
+                    "get_me",
                     "search_repositories",
                     "get_file_contents",
                     "search_code",
