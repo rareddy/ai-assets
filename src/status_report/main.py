@@ -61,7 +61,7 @@ _VALID_SOURCES = ("jira", "slack", "github", "google", "browser")
 _VALID_FORMATS = ("text", "markdown", "json")
 
 
-def _configure_logging(level: str = "WARNING") -> None:
+def _configure_logging(level: str = "INFO") -> None:
     configure_structlog(log_level=level)
 
 
@@ -249,6 +249,12 @@ def main() -> None:
             sys.exit(3)
 
     # ── Run agent with MCP servers ─────────────────────────────────────────
+    sources_label = ", ".join(requested_sources) if requested_sources else "all configured"
+    print(
+        f"Generating report for {args.user} | period: {period.label or str(period.start.date())} | sources: {sources_label}",
+        file=sys.stderr,
+    )
+
     try:
         exit_code = asyncio.run(
             _run_with_mcp(
