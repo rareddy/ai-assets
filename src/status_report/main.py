@@ -33,6 +33,30 @@ from status_report.tracing import configure_structlog
 
 logger = structlog.get_logger(__name__)
 
+
+def _load_dotenv() -> None:
+    """Load .env into os.environ so MCP subprocesses and build_mcp_configs see all credentials.
+
+    pydantic-settings loads .env for Config but does not modify os.environ, so
+    build_mcp_configs(dict(os.environ)) would miss any vars defined only in .env.
+    Only sets keys not already present — existing shell exports take priority.
+    """
+    from pathlib import Path
+
+    env_file = Path(".env")
+    if not env_file.exists():
+        return
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 _VALID_SOURCES = ("jira", "slack", "github", "google", "browser")
 _VALID_FORMATS = ("text", "markdown", "json")
 
@@ -140,6 +164,7 @@ async def _run_with_mcp(
 
 def main() -> None:
     """CLI entry point — parses args, starts MCP servers, runs agent."""
+    _load_dotenv()
     _configure_logging()
 
     parser = argparse.ArgumentParser(
