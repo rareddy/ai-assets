@@ -101,8 +101,9 @@ class Config(BaseSettings):
     jira_user_email: Optional[str] = Field(None, alias="JIRA_USER_EMAIL")
     jira_api_token: Optional[str] = Field(None, alias="JIRA_API_TOKEN")
 
-    # Slack (optional)
-    slack_bot_token: Optional[str] = Field(None, alias="SLACK_BOT_TOKEN")
+    # Slack (optional — browser session tokens, no admin approval needed)
+    slack_mcp_xoxc_token: Optional[str] = Field(None, alias="SLACK_MCP_XOXC_TOKEN")
+    slack_mcp_xoxd_token: Optional[str] = Field(None, alias="SLACK_MCP_XOXD_TOKEN")
 
     # GitHub (optional)
     github_token: Optional[str] = Field(None, alias="GITHUB_TOKEN")
@@ -114,6 +115,14 @@ class Config(BaseSettings):
 
     # Agent limits
     max_agent_turns: int = Field(50, alias="MAX_AGENT_TURNS")
+    max_response_tokens: int = Field(8096, alias="MAX_RESPONSE_TOKENS")
+
+    @field_validator("max_response_tokens")
+    @classmethod
+    def validate_max_response_tokens(cls, v: int) -> int:
+        if v < 1024:
+            raise ValueError("MAX_RESPONSE_TOKENS must be >= 1024")
+        return v
 
     @field_validator("max_agent_turns")
     @classmethod

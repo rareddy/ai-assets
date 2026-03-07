@@ -109,6 +109,7 @@ A Playwright browser fallback MCP server is always available; it doubles as a Sl
 |----------|---------|---------|
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model deployed in your Vertex AI project |
 | `MAX_AGENT_TURNS` | `50` | Max agent loop iterations (Claude tool_use cycles) per report |
+| `MAX_RESPONSE_TOKENS` | `8096` | Max tokens per Claude response (must be ≥ 1024) |
 
 ---
 
@@ -270,12 +271,6 @@ src/status_report/
     ├── google.py     # Google OAuth consent flow + token refresh
     └── slack.py      # Playwright-based Slack token extractor + browser session login
 ```
-
----
-
-## Further Reading
-
-- **[User Guide](docs/user-guide.md)** — full feature documentation, Docker details, troubleshooting
 
 ---
 

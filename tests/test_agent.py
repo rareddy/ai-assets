@@ -99,8 +99,8 @@ class TestRunAgent:
 
         with patch("status_report.agent.anthropic") as mock_anthropic:
             mock_client = MagicMock()
-            mock_client.messages.create.return_value = mock_response
-            mock_anthropic.AnthropicVertex.return_value = mock_client
+            mock_client.messages.create = AsyncMock(return_value=mock_response)
+            mock_anthropic.AsyncAnthropicVertex.return_value = mock_client
 
             with patch("status_report.agent.RunLogger"):
                 with patch("status_report.agent.RunHistoryStore"):
@@ -135,8 +135,8 @@ class TestRunAgent:
 
         with patch("status_report.agent.anthropic") as mock_anthropic:
             mock_client = MagicMock()
-            mock_client.messages.create.side_effect = [tool_response, final_response]
-            mock_anthropic.AnthropicVertex.return_value = mock_client
+            mock_client.messages.create = AsyncMock(side_effect=[tool_response, final_response])
+            mock_anthropic.AsyncAnthropicVertex.return_value = mock_client
 
             with patch("status_report.agent.RunLogger"):
                 with patch("status_report.agent.RunHistoryStore"):
@@ -172,8 +172,8 @@ class TestRunAgent:
 
         with patch("status_report.agent.anthropic") as mock_anthropic:
             mock_client = MagicMock()
-            mock_client.messages.create.side_effect = [tool_response, final_response]
-            mock_anthropic.AnthropicVertex.return_value = mock_client
+            mock_client.messages.create = AsyncMock(side_effect=[tool_response, final_response])
+            mock_anthropic.AsyncAnthropicVertex.return_value = mock_client
 
             with patch("status_report.agent.RunLogger"):
                 with patch("status_report.agent.RunHistoryStore"):
@@ -213,10 +213,10 @@ class TestRunAgent:
         with patch("status_report.agent.anthropic") as mock_anthropic:
             mock_client = MagicMock()
             # 2 turns of tool use, then the turn-limit final call
-            mock_client.messages.create.side_effect = [
+            mock_client.messages.create = AsyncMock(side_effect=[
                 tool_response, tool_response, final_response
-            ]
-            mock_anthropic.AnthropicVertex.return_value = mock_client
+            ])
+            mock_anthropic.AsyncAnthropicVertex.return_value = mock_client
 
             with patch("status_report.agent.RunLogger"):
                 with patch("status_report.agent.RunHistoryStore"):
@@ -270,8 +270,8 @@ class TestRunAgent:
 
         with patch("status_report.agent.anthropic") as mock_anthropic:
             mock_client = MagicMock()
-            mock_client.messages.create.return_value = mock_response
-            mock_anthropic.AnthropicVertex.return_value = mock_client
+            mock_client.messages.create = AsyncMock(return_value=mock_response)
+            mock_anthropic.AsyncAnthropicVertex.return_value = mock_client
 
             with patch("status_report.agent.RunLogger"):
                 with patch("status_report.agent.RunHistoryStore"):
@@ -299,8 +299,8 @@ class TestRunAgent:
 
         with patch("status_report.agent.anthropic") as mock_anthropic:
             mock_client = MagicMock()
-            mock_client.messages.create.return_value = mock_response
-            mock_anthropic.AnthropicVertex.return_value = mock_client
+            mock_client.messages.create = AsyncMock(return_value=mock_response)
+            mock_anthropic.AsyncAnthropicVertex.return_value = mock_client
 
             with patch("status_report.agent.RunLogger") as mock_logger_cls:
                 mock_run_logger = MagicMock()

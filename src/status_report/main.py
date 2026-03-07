@@ -66,7 +66,7 @@ async def _run_with_mcp(
     if not configs:
         print(
             "ERROR: No MCP servers can be configured. "
-            "Set at least one of: GITHUB_TOKEN, JIRA_API_TOKEN, SLACK_BOT_TOKEN, GOOGLE_CLIENT_ID.",
+            "Set at least one of: GITHUB_TOKEN, JIRA_API_TOKEN, SLACK_MCP_XOXC_TOKEN, GOOGLE_CLIENT_ID.",
             file=sys.stderr,
         )
         return 2
