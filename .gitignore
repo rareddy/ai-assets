@@ -39,7 +39,8 @@ coverage.xml
 .DS_Store
 Thumbs.db
 
-# Playwright
+# Node / Playwright
+node_modules/
 playwright-report/
 test-results/
 
