@@ -145,6 +145,55 @@ def _parse_claude_response(text: str, period: ReportPeriod, user: str, output_fo
     )
 
 
+# Tool results are truncated to prevent context overflow (GitHub code search can be huge).
+# ~8 000 chars ≈ 2 000 tokens; generous enough for useful data.
+_MAX_TOOL_RESULT_CHARS = 8_000
+
+# Total message-history budget before we start dropping oldest tool-result pairs.
+# 500 000 chars ≈ 125 000 tokens — well inside the 200 000-token API limit.
+_MAX_MESSAGES_CHARS = 500_000
+
+
+def _truncate_result(text: str) -> str:
+    """Cap a single tool result, appending a truncation notice if needed."""
+    if len(text) <= _MAX_TOOL_RESULT_CHARS:
+        return text
+    dropped = len(text) - _MAX_TOOL_RESULT_CHARS
+    return text[:_MAX_TOOL_RESULT_CHARS] + f"\n\n[...truncated — {dropped:,} chars omitted to stay within context limits...]"
+
+
+def _estimate_chars(messages: list[dict[str, Any]]) -> int:
+    """Rough character count of the entire message list."""
+    total = 0
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            total += len(content)
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    total += len(str(item.get("content", "") or item.get("text", "")))
+                elif hasattr(item, "text"):
+                    total += len(item.text)
+    return total
+
+
+def _prune_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop oldest tool-use / tool-result pairs to stay under the char budget.
+
+    Message structure:
+        messages[0]  — initial user request (always kept)
+        messages[1]  — assistant turn N (tool_use blocks)   ┐ oldest pair
+        messages[2]  — user turn N (tool_result blocks)     ┘
+        ...
+    Pairs are dropped two at a time from the front until under budget.
+    """
+    while len(messages) > 3 and _estimate_chars(messages) > _MAX_MESSAGES_CHARS:
+        messages = [messages[0]] + messages[3:]
+        logger.info("messages_pruned", remaining_messages=len(messages))
+    return messages
+
+
 @retry(
     retry=retry_if_exception_type(
         (anthropic.APIConnectionError, anthropic.RateLimitError, anthropic.InternalServerError)
@@ -230,6 +279,9 @@ async def run_agent(
     while agent_turns < max_turns:
         agent_turns += 1
 
+        # Drop oldest tool-result pairs if history is growing too large.
+        messages = _prune_messages(messages)
+
         logger.info("agent_loop_turn", turn=agent_turns, message_count=len(messages))
 
         response = await _call_claude(
@@ -276,7 +328,7 @@ async def run_agent(
                 return {
                     "type": "tool_result",
                     "tool_use_id": block.id,
-                    "content": result_text,
+                    "content": _truncate_result(result_text),
                 }
 
             tool_results = list(await asyncio.gather(*[_execute_one(b) for b in tool_blocks]))
