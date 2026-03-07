@@ -1,6 +1,6 @@
 # Status Report Agent
 
-An agentic CLI tool that generates daily or periodic status reports by using Claude as an autonomous sub-agent with MCP (Model Context Protocol) tools connected to your workplace systems — Jira, GitHub, Slack, Google Calendar, Google Drive, and Gmail. Claude investigates your activity, drills into significant items, and produces a rich, detailed report.
+An agentic CLI tool that generates daily or periodic status reports of your **own contributions** by using Claude as an autonomous sub-agent with MCP (Model Context Protocol) tools connected to your workplace systems — Jira, GitHub, Slack, Google Calendar, Google Drive, and Gmail. Claude investigates work you personally authored or created, drills into significant items in depth, and produces a rich, detailed report of what you actually did — not a list of things you were mentioned in or asked to review.
 
 ## Quick Start
 
@@ -31,8 +31,8 @@ The first run defaults to "today". Every subsequent run without `--period` autom
 Unlike traditional data aggregation tools, this agent uses Claude as the **autonomous brain**:
 
 1. **Python starts MCP servers** as subprocesses — each server connects to a workplace tool (GitHub, Jira, Slack, etc.)
-2. **Claude investigates** — it searches across all available tools, finds your activity, and drills into significant items (reads PR diffs, ticket descriptions, thread context)
-3. **Claude writes the report** — with genuine insight, not just a list of titles
+2. **Claude investigates your contributions** — it searches using `author:YOU`, `committer:YOU`, `commenter:YOU` filters, finds what you personally created or authored, and drills into significant items (reads PR diffs, ticket descriptions, thread context)
+3. **Claude writes the report** — with genuine insight about what you did and why it matters, not a list of review requests or mentions
 4. **Python enforces safety** — read-only tool allowlist, Gmail body scrubbing, turn limits
 
 ```
@@ -175,12 +175,16 @@ Period : since last run at 2026-02-27T09:30:00Z
 
 KEY ACCOMPLISHMENTS
 -------------------
-- Merged PR #412 (auth-refactor)
-- Closed JIRA-1023 (Deploy pipeline fix)
+- Merged PR #412 (auth-refactor): refactored JWT validation to use shared middleware
+- Closed JIRA-1023: fixed deploy pipeline by pinning Node.js version in CI config
+
+CODE CONTRIBUTIONS
+------------------
+- Opened PR #415 adding rate-limit headers to the API gateway (draft, 3 files changed)
 
 MEETINGS & COLLABORATION
 ------------------------
-- Sprint planning with 6 attendees (45 min)
+- Sprint planning with 6 attendees (45 min) — I proposed moving AUTH-99 to next sprint
 ```
 
 ### Markdown
@@ -191,8 +195,8 @@ MEETINGS & COLLABORATION
 **Period**: since last run at 2026-02-27T09:30:00Z
 
 ## Key Accomplishments
-- Merged PR #412 (auth-refactor)
-- Closed JIRA-1023 (Deploy pipeline fix)
+- Merged PR #412 (auth-refactor): refactored JWT validation to shared middleware
+- Closed JIRA-1023: fixed deploy pipeline by pinning Node.js version in CI config
 ```
 
 ### JSON
