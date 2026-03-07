@@ -19,7 +19,7 @@ uv run python -m status_report.auth.slack --extract
 uv run python -m status_report.auth.google --consent
 
 # 5. Generate your first report
-python -m status_report.main --user you@example.com
+uv run python -m status_report.main --user you@example.com
 ```
 
 The first run defaults to "today". Every subsequent run without `--period` automatically covers the period since your last run.
@@ -116,7 +116,7 @@ A Playwright browser fallback MCP server is always available; it doubles as a Sl
 ## Usage
 
 ```
-python -m status_report.main --user <email> [OPTIONS]
+uv run python -m status_report.main --user <email> [OPTIONS]
 ```
 
 | Argument | Required | Default | Description |
@@ -147,17 +147,17 @@ Available source labels for `--sources`:
 
 ```bash
 # Auto-period — most common daily use
-python -m status_report.main --user alice@example.com
+uv run python -m status_report.main --user alice@example.com
 
 # Yesterday's report in Markdown
-python -m status_report.main --user alice@example.com --period yesterday --format markdown
+uv run python -m status_report.main --user alice@example.com --period yesterday --format markdown
 
 # GitHub and Slack only, as JSON
-python -m status_report.main --user alice@example.com \
+uv run python -m status_report.main --user alice@example.com \
   --period today --sources github,slack --format json
 
 # Custom date range
-python -m status_report.main --user alice@example.com \
+uv run python -m status_report.main --user alice@example.com \
   --period 2026-02-24:2026-02-28 --format markdown > report.md
 ```
 
@@ -218,10 +218,10 @@ When you omit `--period`, the agent reads `~/.status-report/run_history.log` and
 
 ```bash
 # Run 1 — period: "today (first run)"
-python -m status_report.main --user alice@example.com
+uv run python -m status_report.main --user alice@example.com
 
 # Run 2 next day — period: "since last run at 2026-02-28T09:00:00Z"
-python -m status_report.main --user alice@example.com
+uv run python -m status_report.main --user alice@example.com
 ```
 
 History is stored as JSONL, scoped per user, and pruned to 90 days automatically.
