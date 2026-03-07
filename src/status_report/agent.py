@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 import anthropic
 import structlog
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from status_report.config import Config, ReportPeriod
 from status_report.mcp.executor import ToolExecutor
@@ -74,15 +81,29 @@ def _build_user_message(user: str, period: ReportPeriod, available_sources: list
 
 
 def _parse_claude_response(text: str, period: ReportPeriod, user: str, output_format: str) -> Report:
-    """Parse Claude's text response into a Report with sections."""
+    """Parse Claude's text response into a Report with sections.
+
+    Text before the first heading is captured as a 'Summary' section rather than
+    being silently dropped.
+    """
     sections: list[ReportSection] = []
     current_heading: str | None = None
     current_lines: list[str] = []
+    pre_heading_lines: list[str] = []
 
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("## ") or stripped.startswith("# "):
-            if current_heading and current_lines:
+            if current_heading is None and pre_heading_lines:
+                # Flush pre-heading content as a Summary section
+                sections.append(
+                    ReportSection(
+                        heading="Summary",
+                        content="\n".join(pre_heading_lines).strip(),
+                    )
+                )
+                pre_heading_lines = []
+            elif current_heading and current_lines:
                 sections.append(
                     ReportSection(
                         heading=current_heading,
@@ -92,9 +113,20 @@ def _parse_claude_response(text: str, period: ReportPeriod, user: str, output_fo
             current_heading = stripped.lstrip("#").strip()
             current_lines = []
         elif stripped:
-            current_lines.append(line)
+            if current_heading is None:
+                pre_heading_lines.append(line)
+            else:
+                current_lines.append(line)
 
-    if current_heading and current_lines:
+    # Flush remaining content
+    if current_heading is None and pre_heading_lines:
+        sections.append(
+            ReportSection(
+                heading="Summary",
+                content="\n".join(pre_heading_lines).strip(),
+            )
+        )
+    elif current_heading and current_lines:
         sections.append(
             ReportSection(
                 heading=current_heading,
@@ -111,6 +143,19 @@ def _parse_claude_response(text: str, period: ReportPeriod, user: str, output_fo
         generated_at=datetime.now(UTC),
         raw_text=text,
     )
+
+
+@retry(
+    retry=retry_if_exception_type(
+        (anthropic.APIConnectionError, anthropic.RateLimitError, anthropic.InternalServerError)
+    ),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    stop=stop_after_attempt(3),
+    reraise=True,
+)
+async def _call_claude(client: anthropic.AsyncAnthropicVertex, **kwargs: Any) -> Any:
+    """Call Claude API with automatic retry on transient errors."""
+    return await client.messages.create(**kwargs)
 
 
 async def run_agent(
@@ -164,7 +209,7 @@ async def run_agent(
     ]
 
     # ── Agent loop ─────────────────────────────────────────────────────────
-    client = anthropic.AnthropicVertex(
+    client = anthropic.AsyncAnthropicVertex(
         project_id=config.vertex_project_id,
         region=config.vertex_region,
     )
@@ -187,9 +232,10 @@ async def run_agent(
 
         logger.info("agent_loop_turn", turn=agent_turns, message_count=len(messages))
 
-        response = client.messages.create(
+        response = await _call_claude(
+            client,
             model=config.claude_model,
-            max_tokens=4096,
+            max_tokens=config.max_response_tokens,
             system=_SYSTEM_PROMPT,
             messages=messages,
             tools=tools,
@@ -205,7 +251,6 @@ async def run_agent(
                 turns=agent_turns,
                 total_tool_calls=executor.call_count,
             )
-            # Extract final text
             report_text = ""
             for block in response.content:
                 if hasattr(block, "text"):
@@ -215,31 +260,26 @@ async def run_agent(
             report.skipped_sources = skipped
             break
 
-        # ── Handle tool_use: dispatch tool calls ───────────────────────────
+        # ── Handle tool_use: dispatch tool calls in parallel ───────────────
         if response.stop_reason == "tool_use":
             # Add Claude's response (with tool_use blocks) to messages
             messages.append({"role": "assistant", "content": response.content})
 
-            # Process each tool call
-            tool_results: list[dict[str, Any]] = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    logger.info(
-                        "tool_call",
-                        tool=block.name,
-                        turn=agent_turns,
-                    )
-                    try:
-                        result_text = await executor.execute(block.name, block.input)
-                    except ValueError as exc:
-                        result_text = str(exc)
+            tool_blocks = [b for b in response.content if b.type == "tool_use"]
 
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    })
+            async def _execute_one(block: Any) -> dict[str, Any]:
+                logger.info("tool_call", tool=block.name, turn=agent_turns)
+                try:
+                    result_text = await executor.execute(block.name, block.input)
+                except ValueError as exc:
+                    result_text = str(exc)
+                return {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_text,
+                }
 
+            tool_results = list(await asyncio.gather(*[_execute_one(b) for b in tool_blocks]))
             messages.append({"role": "user", "content": tool_results})
             continue
 
@@ -259,14 +299,13 @@ async def run_agent(
         break
 
     else:
-        # Turn limit reached
+        # Turn limit reached — ask Claude for best report with data so far
         logger.warning(
             "agent_loop_turn_limit_reached",
             max_turns=max_turns,
             tool_calls=executor.call_count,
         )
 
-        # Ask Claude to produce its best report with data collected so far
         messages.append({
             "role": "user",
             "content": (
@@ -274,9 +313,10 @@ async def run_agent(
                 "status report you can with the information you have gathered so far."
             ),
         })
-        response = client.messages.create(
+        response = await _call_claude(
+            client,
             model=config.claude_model,
-            max_tokens=4096,
+            max_tokens=config.max_response_tokens,
             system=_SYSTEM_PROMPT,
             messages=messages,
         )
@@ -294,7 +334,8 @@ async def run_agent(
     # ── Write RunTrace audit log ───────────────────────────────────────────
     duration = time.monotonic() - run_start
 
-    if skipped and not report.sections:
+    has_content = bool(report.sections or report.raw_text.strip())
+    if not has_content:
         outcome = "failed"
     elif skipped:
         outcome = "partial"
