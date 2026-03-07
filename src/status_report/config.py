@@ -131,4 +131,4 @@ class Config(BaseSettings):
             raise ValueError("MAX_AGENT_TURNS must be >= 1")
         return v
 
-    model_config = {"populate_by_name": True, "extra": "ignore"}
+    model_config = {"populate_by_name": True, "extra": "ignore", "env_file": ".env"}
