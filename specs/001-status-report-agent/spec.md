@@ -2,7 +2,7 @@
 
 **Feature Branch**: `001-status-report-agent`
 **Created**: 2026-02-27
-**Updated**: 2026-03-01
+**Updated**: 2026-03-07
 **Status**: Active
 **Architecture**: MCP-based agentic sub-agent system
 
@@ -17,18 +17,22 @@ limits), and formats output. All intelligence lives in Claude's agent loop.
 
 ### User Story 1 - Generate Today's Status Report (Priority: P1)
 
-A professional runs the agent and receives a detailed, insightful summary of their day.
-Claude autonomously searches across all connected tools, investigates significant items
-(reads PR diffs, ticket descriptions, thread context), and produces a report with
-genuine insight — not just a list of titles.
+A professional runs the agent and receives a detailed, insightful summary of their own
+contributions during the day. Claude autonomously searches across all connected tools,
+investigates work the user themselves authored or created (PRs opened, commits pushed,
+issues filed, comments made, messages sent), reads the significant items in depth
+(PR diffs, ticket descriptions, thread context), and produces a report with genuine
+insight — not just a list of titles.
 
 **Acceptance Scenarios**:
 
 1. **Given** a user with at least one configured MCP server, **When** they request a
-   report for "today", **Then** they receive a detailed report summarizing their
-   activity with context and insight.
+   report for "today", **Then** they receive a detailed report of their own
+   contributions with context and insight — not a list of items they are merely
+   mentioned in or requested to review.
 2. **Given** a user with multiple configured sources, **When** they request a report,
-   **Then** Claude investigates across all available tools and produces a unified report.
+   **Then** Claude investigates across all available tools and produces a unified report
+   of the user's authored activity.
 3. **Given** a user with no activity on a particular source, **When** they request a
    report, **Then** the report omits that source naturally.
 
@@ -87,15 +91,19 @@ any unavailable sources.
 ### Functional Requirements
 
 - **FR-001**: The agent MUST accept a target user identifier and scope all investigation
-  to that user's activity.
+  to that user's **own contributions**: PRs/issues/commits they authored, comments they
+  posted, messages they sent, documents they created or edited, and meetings they
+  attended. Review requests, mentions by others, and items the user did not author
+  MUST NOT be the focus of the report.
 - **FR-002**: The agent MUST support time period inputs: `today`, `yesterday`, `last-24h`,
   `YYYY-MM-DD`, and `YYYY-MM-DD:YYYY-MM-DD`.
 - **FR-003**: The agent MUST run a Claude agent loop using the `tool_use` API — Claude
   decides what to investigate by calling MCP tools, receives results, and iterates until
   it has enough context to write the report.
-- **FR-004**: The agent MUST produce reports with rich detail — Claude investigates
-  significant items (reads PR diffs, ticket descriptions, thread context), not just
-  lists titles.
+- **FR-004**: The agent MUST produce reports with rich detail focused on the user's own
+  contributions — Claude investigates authored PRs (reads diffs, descriptions, review
+  comments received), commits pushed, issues filed, and discussions participated in.
+  Reports describe WHAT the user actually did and WHY it matters, not just titles.
 - **FR-005**: The agent MUST support filtering to a user-specified subset of MCP servers.
 - **FR-006**: The agent MUST support output in plain text, Markdown, and JSON formats.
 - **FR-007**: If an MCP server fails to start, the agent MUST exclude its tools and
@@ -137,8 +145,10 @@ any unavailable sources.
 
 ## Success Criteria
 
-- **SC-001**: Reports contain rich detail — Claude investigates and describes work,
-  not just lists titles.
+- **SC-001**: Reports contain rich detail of the user's own contributions — Claude
+  investigates and describes work the user authored, not review queues or mentions.
+  GitHub searches use `author:USER`, `committer:USER`, `commenter:USER` — not
+  `involves:USER` or `review-requested:USER`.
 - **SC-002**: When one MCP server is unavailable, the agent delivers a report from
   remaining sources.
 - **SC-003**: 100% of runs produce a complete RunTrace audit entry.
