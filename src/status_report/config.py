@@ -50,6 +50,9 @@ def parse_period(value: str) -> ReportPeriod:
     elif value == "last-24h":
         period = ReportPeriod(label="last-24h", start=now - timedelta(hours=24), end=now)
 
+    elif value == "last-7d":
+        period = ReportPeriod(label="last-7d", start=now - timedelta(days=7), end=now)
+
     elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
         try:
             date = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=UTC)
@@ -78,8 +81,8 @@ def parse_period(value: str) -> ReportPeriod:
 
     # FR-014: reject future end dates
     if period.end > now:
-        # Allow "today" — its end is now(), which equals now
-        if value not in ("today", "last-24h"):
+        # Allow rolling windows whose end is now()
+        if value not in ("today", "last-24h", "last-7d"):
             raise ValueError(
                 "ERROR: --period references a future date. "
                 "Reports can only be generated for past or current periods."

@@ -139,6 +139,7 @@ Available source labels for `--sources`:
 | `today` | 00:00 UTC today → now |
 | `yesterday` | Full previous calendar day (UTC) |
 | `last-24h` | Rolling 24 hours from now |
+| `last-7d` | Rolling 7 days from now |
 | `YYYY-MM-DD` | Full calendar day (UTC) |
 | `YYYY-MM-DD:YYYY-MM-DD` | Inclusive date range |
 | _(omitted)_ | Since last successful run (first run: today) |

@@ -181,7 +181,7 @@ def main() -> None:
         required=False,
         default=None,
         help=(
-            "Time range: today | yesterday | last-24h | YYYY-MM-DD | YYYY-MM-DD:YYYY-MM-DD. "
+            "Time range: today | yesterday | last-24h | last-7d | YYYY-MM-DD | YYYY-MM-DD:YYYY-MM-DD. "
             "If omitted, auto-computed from run history."
         ),
     )
