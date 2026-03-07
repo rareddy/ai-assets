@@ -29,24 +29,28 @@ class TestMCPManager:
         """Starting a server successfully returns its handle."""
         manager = MCPManager([simple_config])
 
-        mock_session = AsyncMock()
-        mock_tools_result = MagicMock()
         mock_tool = MagicMock()
         mock_tool.name = "test_tool"
         mock_tool.description = "A test tool"
         mock_tool.inputSchema = {"type": "object"}
+        mock_tools_result = MagicMock()
         mock_tools_result.tools = [mock_tool]
-        mock_session.list_tools = AsyncMock(return_value=mock_tools_result)
+
+        mock_session = AsyncMock()
         mock_session.initialize = AsyncMock()
+        mock_session.list_tools = AsyncMock(return_value=mock_tools_result)
+        # __aenter__ must return the session itself (as real ClientSession does)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        # Patch _create_stdio_connection to return mock streams
-        mock_read = AsyncMock()
-        mock_write = AsyncMock()
-        manager._create_stdio_connection = AsyncMock(return_value=(mock_read, mock_write))
+        # stdio_client is a context manager yielding (read, write) streams
+        mock_stdio_ctx = AsyncMock()
+        mock_stdio_ctx.__aenter__ = AsyncMock(return_value=(AsyncMock(), AsyncMock()))
+        mock_stdio_ctx.__aexit__ = AsyncMock(return_value=None)
 
-        with patch(
-            "status_report.mcp.manager.ClientSession",
-            return_value=mock_session,
+        with (
+            patch("status_report.mcp.manager.stdio_client", return_value=mock_stdio_ctx),
+            patch("status_report.mcp.manager.ClientSession", return_value=mock_session),
         ):
             handles = await manager.start_all()
 

@@ -74,9 +74,17 @@ class MCPManager:
             env=config.env if config.env else None,
         )
 
-        # Create the stdio client connection
-        read_stream, write_stream = await self._create_stdio_connection(server_params)
+        # Enter stdio_client context — starts subprocess and opens streams
+        stdio_ctx = stdio_client(server_params)
+        read_stream, write_stream = await stdio_ctx.__aenter__()
+        self._cleanup_tasks.append(stdio_ctx)
+
+        # Enter ClientSession context — starts the anyio receive loop that routes
+        # responses back to awaiting callers. Without __aenter__, list_tools() hangs.
         session = ClientSession(read_stream, write_stream)
+        await session.__aenter__()
+        self._cleanup_tasks.append(session)
+
         await session.initialize()
 
         # List available tools
@@ -91,18 +99,6 @@ class MCPManager:
         ]
 
         return MCPServerHandle(config=config, session=session, tools=tools)
-
-    async def _create_stdio_connection(self, params: StdioServerParameters) -> tuple:
-        """Create stdio connection to MCP server.
-
-        This uses the mcp SDK's stdio_client. The connection is managed
-        as an async context manager internally.
-        """
-        # The stdio_client returns (read, write) streams
-        ctx = stdio_client(params)
-        streams = await ctx.__aenter__()
-        self._cleanup_tasks.append(ctx)
-        return streams
 
     async def shutdown(self) -> None:
         """Shut down all MCP server subprocesses."""
