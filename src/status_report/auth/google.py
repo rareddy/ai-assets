@@ -92,8 +92,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.consent:
-        client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
-        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+        # Load .env file so the script works without pre-exporting env vars
+        from pydantic_settings import BaseSettings
+        from pydantic import Field as _Field
+
+        class _GoogleEnv(BaseSettings):
+            google_client_id: str = _Field("", alias="GOOGLE_CLIENT_ID")
+            google_client_secret: str = _Field("", alias="GOOGLE_CLIENT_SECRET")
+            model_config = {"populate_by_name": True, "extra": "ignore", "env_file": ".env"}
+
+        _env = _GoogleEnv()
+        client_id = _env.google_client_id
+        client_secret = _env.google_client_secret
         if not client_id or not client_secret:
             print("ERROR: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in your .env or environment", file=sys.stderr)
             sys.exit(1)
