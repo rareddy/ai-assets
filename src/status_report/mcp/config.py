@@ -112,7 +112,7 @@ def build_mcp_configs(env: dict[str, Optional[str]]) -> list[MCPServerConfig]:
 
     # Slack primary — korotovsky/slack-mcp-server with browser session tokens
     # No workspace admin approval required; tokens extracted from Slack web app.
-    # See: docs/user-guide.md#slack-setup or run: python -m status_report.auth.slack --extract
+    # Setup: uv run python -m status_report.auth.slack --extract
     xoxc_token = _env_or_none("SLACK_MCP_XOXC_TOKEN", env)
     xoxd_token = _env_or_none("SLACK_MCP_XOXD_TOKEN", env)
     if xoxc_token and xoxd_token:
