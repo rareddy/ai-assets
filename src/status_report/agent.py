@@ -86,9 +86,9 @@ Focus EXCLUSIVELY on things the user did themselves:
 
 ## Rules
 
-- **Apply the SAME date range to EVERY tool call across ALL sources.** Every search,
-  list, or history query MUST be filtered to the period start and end dates provided
-  in the user message. Never return or report items outside this window.
+- **All sources use the same date range.** Every tool call — regardless of source —
+  must be filtered to the period start and end dates in the user message. Never
+  include items from outside this window.
 - Write in first person ("I opened PR #42 to fix...", "I pushed a commit that...")
 - Be SPECIFIC and DETAILED — describe what the code change does, what the issue addresses,
   what was decided in the meeting. Not just titles.
@@ -111,11 +111,9 @@ def _build_user_message(user: str, period: ReportPeriod, available_sources: list
         f"Available data sources: {sources_str}\n"
         f"Period start (inclusive): {period.start.isoformat()}\n"
         f"Period end   (inclusive): {period.end.isoformat()}\n\n"
-        f"IMPORTANT: Apply this exact date range to EVERY tool call for EVERY source. "
-        f"GitHub searches must use 'created:{period.start.date()}..{period.end.date()}' or "
-        f"equivalent date filters. Jira searches must filter by created/updated within "
-        f"this window. Slack, Calendar, Drive, and Gmail queries must be scoped to the "
-        f"same start–end range. Do NOT include items from outside this window.\n\n"
+        f"IMPORTANT: Every tool call to every source must use the same date range above. "
+        f"GitHub, Jira, Slack, Calendar, Drive, and Gmail must all be queried for the "
+        f"identical window. Do NOT include any items from outside this period.\n\n"
         f"If GitHub tools are available, call get_me first to discover the authenticated "
         f"GitHub username, then use that username for all searches. "
         f"Investigate my own contributions in depth and write a detailed status report."
