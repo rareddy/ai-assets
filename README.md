@@ -26,6 +26,48 @@ The first run defaults to "today". Every subsequent run without `--period` autom
 
 ---
 
+## Using with Claude Code
+
+If you have [Claude Code](https://claude.ai/claude-code) installed, you can run status
+reports interactively without the Python CLI — Claude Code connects to the same MCP
+servers defined in `.mcp.json` and uses the `/status-report` custom command.
+
+### Setup
+
+1. **Source your credentials** in the shell before opening Claude Code:
+
+   ```bash
+   source .env    # or export vars manually
+   ```
+
+2. **Open Claude Code** in the project directory — MCP servers connect automatically.
+   Verify with `/mcp` to see connected servers.
+
+3. **Run the command**:
+
+   ```
+   /status-report --user rareddy@redhat.com --period yesterday
+   /status-report --user rareddy@redhat.com --period last-7d --sources github,jira
+   /status-report --user rareddy@redhat.com --period 2026-03-01:2026-03-07
+   ```
+
+Claude will call `get_me` first to resolve your GitHub login, then search each
+connected source for the requested period, drill into significant items, and write
+a detailed report — the same investigation process as the Python CLI.
+
+### When to use each approach
+
+| Approach | Best for |
+|----------|---------|
+| Claude Code (`/status-report`) | Interactive use, ad-hoc queries, exploring results |
+| Python CLI (`uv run python -m status_report.main`) | Docker, CI/CD, scheduled automation |
+
+The Python CLI adds audit logging, run history (auto-period), structured exit codes,
+and a 3-layer read-only tool allowlist. The Claude Code approach relies on
+`GITHUB_READ_ONLY=1` and `--read-only` server flags.
+
+---
+
 ## How It Works
 
 Unlike traditional data aggregation tools, this agent uses Claude as the **autonomous brain**:
