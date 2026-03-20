@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(python3:*)",
+      "WebSearch",
+      "WebFetch",
+      "mcp__github__*",
+      "mcp__jira__*",
+      "mcp__slack__*",
+      "mcp__google__*"
+    ]
+  }
+}

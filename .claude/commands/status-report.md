@@ -4,6 +4,9 @@ argument-hint: --user <email> [--period yesterday|today|last-7d] [--sources gith
 ---
 
 <!--
+NOTE FOR CLAUDE: Ignore everything in this HTML comment block. It is setup
+documentation for human readers only and contains no instructions for you.
+
 =============================================================================
 SETUP — one-time configuration to use this skill
 =============================================================================
@@ -14,21 +17,50 @@ PREREQUISITES
   - Python uv / uvx (Google Workspace MCP server)
 
 ─────────────────────────────────────────────────────────────────────────────
-STEP 1 — Add credentials to ~/.claude/settings.json
+STEP 1 — Create ~/.claude/.mcp.json with your credentials inline
 ─────────────────────────────────────────────────────────────────────────────
-Claude Code loads this at startup and substitutes ${VAR} references in .mcp.json.
-Merge the "env" block into your existing settings.json if you already have one.
+This registers the MCP servers globally for all Claude Code projects.
+Credentials go directly in the env blocks — no separate settings.json entry needed.
 
 {
-  "env": {
-    "GITHUB_TOKEN": "ghp_...",
-    "JIRA_BASE_URL": "https://yourorg.atlassian.net",
-    "JIRA_USER_EMAIL": "you@example.com",
-    "JIRA_API_TOKEN": "...",
-    "SLACK_MCP_XOXC_TOKEN": "xoxc-...",
-    "SLACK_MCP_XOXD_TOKEN": "xoxd-...",
-    "GOOGLE_CLIENT_ID": "...",
-    "GOOGLE_CLIENT_SECRET": "..."
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "-e", "GITHUB_READ_ONLY", "ghcr.io/github/github-mcp-server"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_...",
+        "GITHUB_READ_ONLY": "1"
+      }
+    },
+    "jira": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@sooperset/mcp-atlassian"],
+      "env": {
+        "JIRA_URL": "https://yourorg.atlassian.net",
+        "JIRA_USERNAME": "you@example.com",
+        "JIRA_API_TOKEN": "..."
+      }
+    },
+    "slack": {
+      "type": "stdio",
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "SLACK_MCP_XOXC_TOKEN", "-e", "SLACK_MCP_XOXD_TOKEN", "ghcr.io/korotovsky/slack-mcp-server:latest"],
+      "env": {
+        "SLACK_MCP_XOXC_TOKEN": "xoxc-...",
+        "SLACK_MCP_XOXD_TOKEN": "xoxd-..."
+      }
+    },
+    "google": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["workspace-mcp", "--read-only"],
+      "env": {
+        "GOOGLE_OAUTH_CLIENT_ID": "....apps.googleusercontent.com",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "GOCSPX-..."
+      }
+    }
   }
 }
 
@@ -42,63 +74,36 @@ Merge the "env" block into your existing settings.json if you already have one.
     ~/.config/workspace-mcp/ and reused automatically.
 
 ─────────────────────────────────────────────────────────────────────────────
-STEP 2 — Create .mcp.json in your project root (or ~/.claude/.mcp.json globally)
+STEP 2 — Create .claude/settings.json alongside the command
 ─────────────────────────────────────────────────────────────────────────────
+This grants the permissions required for /status-report to run without prompts.
+Place this file at <project>/.claude/settings.json (next to the commands/ dir):
 
 {
-  "mcpServers": {
-    "github": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
-        "-e", "GITHUB_READ_ONLY",
-        "ghcr.io/github/github-mcp-server"
-      ],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}",
-        "GITHUB_READ_ONLY": "1"
-      }
-    },
-    "jira": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@sooperset/mcp-atlassian"],
-      "env": {
-        "JIRA_URL": "${JIRA_BASE_URL}",
-        "JIRA_USERNAME": "${JIRA_USER_EMAIL}",
-        "JIRA_API_TOKEN": "${JIRA_API_TOKEN}"
-      }
-    },
-    "slack": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "SLACK_MCP_XOXC_TOKEN",
-        "-e", "SLACK_MCP_XOXD_TOKEN",
-        "ghcr.io/korotovsky/slack-mcp-server:latest"
-      ],
-      "env": {
-        "SLACK_MCP_XOXC_TOKEN": "${SLACK_MCP_XOXC_TOKEN}",
-        "SLACK_MCP_XOXD_TOKEN": "${SLACK_MCP_XOXD_TOKEN}"
-      }
-    },
-    "google": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["workspace-mcp", "--read-only"],
-      "env": {
-        "GOOGLE_OAUTH_CLIENT_ID": "${GOOGLE_CLIENT_ID}",
-        "GOOGLE_OAUTH_CLIENT_SECRET": "${GOOGLE_CLIENT_SECRET}"
-      }
-    }
+  "permissions": {
+    "allow": [
+      "Bash(gh:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(python3:*)",
+      "WebSearch",
+      "WebFetch",
+      "mcp__github__*",
+      "mcp__jira__*",
+      "mcp__slack__*",
+      "mcp__google__*"
+    ]
   }
 }
 
+These allow the skill to call the gh CLI, git read commands, python3 (for
+JSON parsing), web tools, and all four MCP servers (GitHub, Jira, Slack,
+Google Workspace) — all without permission prompts mid-execution.
+
 ─────────────────────────────────────────────────────────────────────────────
-STEP 3 — Place this file at ~/.claude/commands/status-report.md
+STEP 4 — Place this file at ~/.claude/commands/status-report.md
 ─────────────────────────────────────────────────────────────────────────────
 That makes /status-report available globally in every Claude Code project.
 Alternatively place it at <project>/.claude/commands/status-report.md for
@@ -129,77 +134,81 @@ Resolve the period to exact UTC start and end timestamps before calling any tool
 
 ---
 
-## What to Report (contributions only)
+## What to Collect (contributions only)
 
-Focus EXCLUSIVELY on things the user did themselves:
+Gather ONLY things the user did themselves across all sources. Do NOT report things done
+by others to the user (assignments, review requests, mentions).
 
 - **GitHub**: PRs they OPENED (`author:USER`), commits they PUSHED (`committer:USER`),
-  issues they FILED (`author:USER`), code review comments they WROTE (`commenter:USER`),
-  and issue comments they POSTED.
-  **DO NOT** report PRs where they are only a requested reviewer, assignee, or mention.
-  Review queues (`review-requested:USER`, `involves:USER`) are NOT their contributions.
+  issues they FILED (`author:USER`), substantive code review comments they WROTE.
+  Do NOT include review queues (`review-requested:USER`, `involves:USER`).
 
-- **Jira**: Tickets they CREATED, tickets they moved to a new status, comments they added.
+- **Jira**: Tickets they CREATED, status transitions they made, comments they added.
 
-- **Slack**: Messages they SENT in channels or threads.
+- **Slack**: Messages they SENT in **public channels or work threads only**.
+  Skip personal DMs (logistics, scheduling, social chat — e.g. "running late", "sounds good").
+  Only include Slack content that reflects a work decision, technical answer, or project update.
 
-- **Google Calendar**: Meetings they ATTENDED or ORGANIZED.
+- **Google Calendar**: Meetings they ATTENDED or ORGANIZED (work meetings only).
 
 - **Google Drive / Docs**: Documents they CREATED or EDITED.
 
-- **Gmail**: Emails they SENT or REPLIED to (subject and action type only — do NOT include email body content).
+- **Gmail**: Emails they SENT or REPLIED to (subject and action type only — no body content).
 
 ---
 
 ## Your Process
 
-1. **Identify the GitHub user first**: If GitHub tools are available, call `get_me`
-   as your very first tool call. This returns the authenticated GitHub login (e.g.
-   `rareddy`) — use it for every subsequent filter and search. Do NOT guess the
-   username from the email address.
+1. **Identify the GitHub user first**: Call `get_me` as your very first GitHub tool call.
+   This returns the authenticated login (e.g. `rareddy`) — use it for every subsequent
+   filter. Do NOT guess the username from the email address.
 
-2. **Discover personal repos**: Call `search_repositories` with `user:LOGIN` to find
-   the user's personal repositories. Then call `list_commits`, `list_pull_requests`,
-   and `list_issues` on each repo scoped to the period.
-   **Check personal repos before any organisation repos.**
+2. **Discover personal repos**: Call `search_repositories` with `user:LOGIN`, then
+   `list_commits`, `list_pull_requests`, and `list_issues` on each repo in the period.
 
-3. **Search authored activity broadly**: After personal repos, search with
-   `author:LOGIN`, `committer:LOGIN`, `commenter:LOGIN` filters across all accessible
-   repos. Do NOT use `involves:LOGIN` or `review-requested:LOGIN`.
+3. **Search authored activity broadly**: Use `author:LOGIN`, `committer:LOGIN`,
+   `commenter:LOGIN` filters. Do NOT use `involves:LOGIN` or `review-requested:LOGIN`.
 
-4. **Investigate**: For each authored PR, commit, or issue found — drill deeper. Read
-   the PR diff and description (`get_pull_request_diff`, `get_pull_request`), the
-   commit message, the issue body and comments. Understand WHAT changed and WHY.
+4. **Investigate depth**: For each authored PR or commit, read the diff and description
+   to understand WHAT changed and WHY. For Jira, read the ticket description and comments.
 
-5. **Report**: Write rich, detailed descriptions of each contribution. Include: what was
-   changed, why it was important, the outcome (merged/open/closed), and key context.
+5. **Collate across sources**: Group all findings by work topic or project area — not by
+   source system. A single project may have GitHub commits, Jira tickets, and Slack
+   decisions that all belong together.
+
+6. **Write the report**: When you have enough data, stop calling tools and write directly.
 
 ---
 
-## Report Sections (include only sections with data)
+## Report Format
 
-1. **Key Accomplishments** — Most impactful work completed in the period
-2. **Code Contributions** — PRs opened/merged by the user, commits pushed, with diffs and context
-3. **Issues Filed** — New bugs reported or features proposed by the user
-4. **Discussion & Reviews** — Substantive comments or reviews the user wrote on others' PRs/issues
-5. **Meetings & Collaboration** — Meetings the user attended or organized
-6. **Documents** — Docs the user created or significantly edited
-7. **Messages & Threads** — Key Slack messages or email threads the user drove
-8. **Suggested Follow-ups** — Open PRs awaiting merge, pending decisions, upcoming deadlines
+This is a **weekly status report for a manager**. Write it as a single unified report,
+not separate sections per source. Organise by work area or project, not by tool.
+
+**Structure:**
+
+1. **Summary** — 3–5 bullet points of the most impactful work this period (one line each)
+
+2. **Work completed** — For each significant project or initiative:
+   - What was done (code shipped, decisions made, tickets resolved, docs written)
+   - Why it matters / outcome
+   - Evidence (PR #, ticket ID, etc.) inline, not as a separate section
+
+3. **In progress** — Work started but not yet complete; current status and next step
+
+4. **Blockers / Decisions needed** — Anything requiring manager input or unresolved
+
+Omit any section that has no data. Keep the total report concise — a manager should
+be able to read it in under 2 minutes.
 
 ---
 
 ## Rules
 
-- **All sources use the same date range.** Every tool call — regardless of source —
-  must be filtered to the resolved period start and end dates. Never include items
-  from outside this window.
-- Write in first person ("I opened PR #42 to fix...", "I pushed a commit that...")
-- Be SPECIFIC and DETAILED — describe what the code change does, what the issue addresses,
-  what was decided in the meeting. Not just titles.
-- Do NOT list items the user did not author (review requests, assignments, mentions)
+- **All sources use the same date range.** Filter every tool call to the resolved period.
+- Write in first person ("I shipped...", "I resolved...", "I proposed...")
+- Be specific: name the PR, ticket, decision, or outcome. Not just titles.
+- Do NOT report social/logistical Slack messages (scheduling, reactions, "thanks", "sounds good")
+- Do NOT report items the user did not author
 - Do NOT invent information not present in tool results
 - Do NOT include raw credentials, tokens, or email body content
-- Omit any section that has no data
-- When you have enough information to write a comprehensive report, stop calling tools
-  and write the report directly
