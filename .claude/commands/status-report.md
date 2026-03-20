@@ -3,6 +3,117 @@ description: Generate a status report for your contributions from connected work
 argument-hint: --user <email> [--period yesterday|today|last-7d] [--sources github,jira,slack,google]
 ---
 
+<!--
+=============================================================================
+SETUP — one-time configuration to use this skill
+=============================================================================
+
+PREREQUISITES
+  - Docker (GitHub + Slack MCP servers)
+  - Node.js / npx (Jira MCP server)
+  - Python uv / uvx (Google Workspace MCP server)
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 1 — Add credentials to ~/.claude/settings.json
+─────────────────────────────────────────────────────────────────────────────
+Claude Code loads this at startup and substitutes ${VAR} references in .mcp.json.
+Merge the "env" block into your existing settings.json if you already have one.
+
+{
+  "env": {
+    "GITHUB_TOKEN": "ghp_...",
+    "JIRA_BASE_URL": "https://yourorg.atlassian.net",
+    "JIRA_USER_EMAIL": "you@example.com",
+    "JIRA_API_TOKEN": "...",
+    "SLACK_MCP_XOXC_TOKEN": "xoxc-...",
+    "SLACK_MCP_XOXD_TOKEN": "xoxd-...",
+    "GOOGLE_CLIENT_ID": "...",
+    "GOOGLE_CLIENT_SECRET": "..."
+  }
+}
+
+  GitHub token scopes: repo (read), read:org
+  Jira API token: https://id.atlassian.com/manage-profile/security/api-tokens
+  Slack tokens (no admin approval — browser session tokens, re-extract when session expires):
+    SLACK_MCP_XOXC_TOKEN → Slack web app DevTools → localStorage key "localConfig_v2" (xoxc-...)
+    SLACK_MCP_XOXD_TOKEN → Slack web app DevTools → Application → Cookies → "d" (xoxd-...)
+  Google OAuth: create an OAuth 2.0 Desktop client in Google Cloud Console.
+    On first run the MCP server opens a browser for consent; tokens cached at
+    ~/.config/workspace-mcp/ and reused automatically.
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 2 — Create .mcp.json in your project root (or ~/.claude/.mcp.json globally)
+─────────────────────────────────────────────────────────────────────────────
+
+{
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "-e", "GITHUB_READ_ONLY",
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}",
+        "GITHUB_READ_ONLY": "1"
+      }
+    },
+    "jira": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@sooperset/mcp-atlassian"],
+      "env": {
+        "JIRA_URL": "${JIRA_BASE_URL}",
+        "JIRA_USERNAME": "${JIRA_USER_EMAIL}",
+        "JIRA_API_TOKEN": "${JIRA_API_TOKEN}"
+      }
+    },
+    "slack": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "SLACK_MCP_XOXC_TOKEN",
+        "-e", "SLACK_MCP_XOXD_TOKEN",
+        "ghcr.io/korotovsky/slack-mcp-server:latest"
+      ],
+      "env": {
+        "SLACK_MCP_XOXC_TOKEN": "${SLACK_MCP_XOXC_TOKEN}",
+        "SLACK_MCP_XOXD_TOKEN": "${SLACK_MCP_XOXD_TOKEN}"
+      }
+    },
+    "google": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["workspace-mcp", "--read-only"],
+      "env": {
+        "GOOGLE_OAUTH_CLIENT_ID": "${GOOGLE_CLIENT_ID}",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "${GOOGLE_CLIENT_SECRET}"
+      }
+    }
+  }
+}
+
+─────────────────────────────────────────────────────────────────────────────
+STEP 3 — Place this file at ~/.claude/commands/status-report.md
+─────────────────────────────────────────────────────────────────────────────
+That makes /status-report available globally in every Claude Code project.
+Alternatively place it at <project>/.claude/commands/status-report.md for
+project-local use only.
+
+─────────────────────────────────────────────────────────────────────────────
+USAGE
+─────────────────────────────────────────────────────────────────────────────
+/status-report --user you@example.com
+/status-report --user you@example.com --period today
+/status-report --user you@example.com --period last-7d --sources github,jira
+/status-report --user you@example.com --period 2026-03-01:2026-03-14
+=============================================================================
+-->
+
 Generate a status report for my own contributions.
 
 Arguments: $ARGUMENTS
