@@ -103,9 +103,9 @@ JSON parsing), web tools, and all four MCP servers (GitHub, Jira, Slack,
 Google Workspace) — all without permission prompts mid-execution.
 
 ─────────────────────────────────────────────────────────────────────────────
-STEP 4 — Place this file at ~/.claude/commands/daily-status-report.md
+STEP 3 — Place this file at ~/.claude/commands/daily-status-report.md
 ─────────────────────────────────────────────────────────────────────────────
-That makes /status-report available globally in every Claude Code project.
+That makes /daily-status-report available globally in every Claude Code project.
 Alternatively place it at <project>/.claude/commands/daily-status-report.md for
 project-local use only.
 
@@ -113,15 +113,31 @@ project-local use only.
 
 ---
 
+## Date Range Resolution
+
+If the user does not specify a date range, resolve it automatically using the current date:
+
+- **Monday**: default to the previous Friday (covers the last working day before the weekend gap)
+- **Any other weekday**: default to yesterday
+- Always state the resolved date range at the top of the report so the user can confirm it.
+
+---
+
 ## What to Collect (contributions only)
 
-Gather ONLY things the user did themselves across all sources. Do NOT report things done by others to the user (assignments, review requests, mentions). If could not reach to certain tools mention that you could not reach those tools.for cli based tools if you need credentials ask for them.
+Gather ONLY things the user did themselves across all sources. Do NOT report things done
+by others to the user (assignments, review requests, mentions).
+If certain tools are unreachable, note them explicitly at the end of the report.
 
 - **GitHub**: PRs they OPENED (`author:USER`), commits they PUSHED (`committer:USER`),
-  issues they FILED (`author:USER`), substantive code review comments they WROTE.
+  issues they FILED (`author:USER`), substantive code review comments they WROTE
+  (`type:pr commenter:USER` — exclude drive-by "LGTM" or "+1" comments).
   Do NOT include review queues (`review-requested:USER`, `involves:USER`).
+  For merged PRs, note time-to-merge (opened → merged date).
+  If a commit was pushed directly without a PR, label it **[direct push]**.
 
-- **Jira**: Tickets they CREATED, status transitions they made, comments they added.
+- **Jira**: Tickets they CREATED, status transitions they MADE, comments they ADDED.
+  Note transition dates when a ticket changed status during the period.
 
 - **Slack**: Messages they SENT in **public channels or work threads only**.
   Skip personal DMs (logistics, scheduling, social chat — e.g. "running late", "sounds good").
@@ -129,7 +145,7 @@ Gather ONLY things the user did themselves across all sources. Do NOT report thi
 
 - **Google Calendar**: Meetings they ATTENDED or ORGANIZED (work meetings only).
 
-- **Google Drive / Docs**: Documents they CREATED or EDITED.
+- **Google Drive / Docs**: Documents they CREATED or EDITED (include link and activity type).
 
 - **Gmail**: Emails they SENT or REPLIED to (subject and action type only — no body content).
 
@@ -137,73 +153,87 @@ Gather ONLY things the user did themselves across all sources. Do NOT report thi
 
 ## Your Process
 
-1. **Identify the GitHub user first**: Call `get_me` as your very first GitHub tool call.
-   This returns the authenticated login (e.g. `rareddy`) — use it for every subsequent
-   filter. Do NOT guess the username from the email address, ask if needed as first step.
+1. **Resolve the date range first**: Apply the date range rules above before calling any tools.
+   State the resolved range explicitly before proceeding.
 
-2. **Discover personal repos**: Call `search_repositories` with `user:LOGIN`, then
+2. **Identify the GitHub user**: Call `get_me` as your first GitHub tool call to get the
+   authenticated login (e.g. `rareddy`). Use it for every subsequent filter.
+   Do NOT guess the username from the email address.
+
+3. **Discover personal repos**: Call `search_repositories` with `user:LOGIN`, then
    `list_commits`, `list_pull_requests`, and `list_issues` on each repo in the period.
 
-3. **Search authored activity broadly**: Use `author:LOGIN`, `committer:LOGIN`,
+4. **Search authored activity broadly**: Use `author:LOGIN`, `committer:LOGIN`,
    `commenter:LOGIN` filters. Do NOT use `involves:LOGIN` or `review-requested:LOGIN`.
+   Additionally search `type:pr commenter:LOGIN` to find substantive code review comments.
 
-4. **Investigate depth**: For each authored PR or commit, read the diff and description
-   to understand WHAT changed and WHY. For Jira, read the ticket description and comments.
+5. **Investigate depth**: For each authored PR or commit, read the diff and description
+   to understand WHAT changed and WHY. For review comments, assess whether they are
+   substantive (technical feedback, requested changes) vs. noise (LGTM, approvals only).
+   For Jira, read the ticket description, comments, and any status transitions made.
 
-5. **Collate across sources**: Group all findings by work topic or project area — not by
-   source system. A single project may have GitHub commits, Jira tickets, and Slack
-   decisions, documents & emails read/written that all belong together.
+6. **Collate across sources**: Group all findings by work topic or project area — not by
+   source system. A single project may have GitHub commits, Jira tickets, Slack decisions,
+   documents, and emails that all belong together.
 
-6. **Write the report**: When you have enough data, stop calling tools and write directly.
+7. **Handle zero activity**: If no authored activity is found across all tools for the
+   resolved date range, output:
+   > "No authored activity found for [DATE RANGE]. Tools checked: [list]."
+   Do not invent or infer activity.
+
+8. **Write the report**: When you have enough data, stop calling tools and write directly.
 
 ---
 
 ## What you should do:
-Analyze the provided structured data (from GitHub, Jira, Slack, Email, etc.) and:
+Analyze the collected data and:
 1. Group all activities by project or feature area.
-2. Consolidate related work (PRs, commits, reviews, issues, discussions) under unified project headings.
-3. Generate a concise daily status report with no more than 5 bullet points total.
+2. Consolidate related work (PRs, commits, reviews, issues, discussions, docs, emails) under unified project headings.
+3. Generate a concise status report with no more than 5 bullet points total.
 4. Highlight:
    - Completed or progressed work
    - Ongoing work
    - Blockers or dependencies (clearly marked)
    - Waiting-on-others situations
 5. Identify and include next steps for each project.
-6. Extract implicit skills demonstrated from the work such as technologies, problem-solving areas, or system design patterns.
-7. Include any documents written or commented with their links and type of activity
+6. Include any documents created or edited with their links and activity type.
 
 ---
 
 ## Your Goal:
-Produce a highly scannable, team-ready status update that improves visibility, collaboration, and accountability while also capturing evolving skill signals.
+Produce a highly scannable, team-ready status update that improves visibility, collaboration, and accountability.
 
-Result:
-Return output in the following structure:
+## Output Format:
 
-1. **Daily Status (Max 5 bullets total)**
-   - [Project Name]&#58; Summary of work (include inline references like PR #123, JIRA-456 with links)
+**Date Range: [RESOLVED DATE RANGE]**
+
+1. **Status (Max 5 bullets total)**
+   - [Project Name]: Summary of work (include inline references with links, e.g. [PR #123](url), [JIRA-456](url))
      - Progress:
+     - Blocked / Waiting: _(omit if none)_
      - Next Steps:
 
-2. **Blockers Summary (if any)**
-   - list of blockers and who/what is required
+2. **Blockers Summary** _(omit section if none)_
+   - List of blockers and who/what is required to unblock
 
 ---
 
 ## Rules
-- **All sources use the same date range.** Filter every tool call to the resolved period.
+- **All sources use the same resolved date range.** Filter every tool call to that period.
 - Write in first person ("I shipped...", "I resolved...", "I proposed...")
-- Be specific: name the PR, ticket, decision, or outcome. Not just titles.
+- Be specific: name the PR, ticket, decision, or outcome — not just titles.
+- Include time-to-merge for merged PRs (e.g. "merged in 2h", "merged next day").
 - Do NOT report social/logistical Slack messages (scheduling, reactions, "thanks", "sounds good")
 - Do NOT report items the user did not author
 - Do NOT invent information not present in tool results
 - Do NOT include raw credentials, tokens, or email body content
-- Use inline references (e.g., PR #123, JIRA-456, Slack thread)
+- Use inline references with links (e.g. [PR #123](url), [JIRA-456](url))
 - Keep it concise and dense (standup-friendly)
 - Avoid redundancy by merging related activities
 - Prioritize high-impact work over minor actions
 - Do not include trivial/noise activities
 - Ensure grouping is logical and not tool-based (i.e., by project, not GitHub vs Jira)
+- Note any tools that were unreachable at the end of the report
 
 ## Context:
-Use the MCP tools configured or cli tools like gh cli etc where needed
+Use the MCP tools configured or CLI tools like `gh` where needed.
