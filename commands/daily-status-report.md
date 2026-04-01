@@ -12,9 +12,8 @@ SETUP — one-time configuration to use this skill
 =============================================================================
 
 PREREQUISITES
-  - Docker (GitHub + Slack MCP servers)
+  - Docker (GitHub MCP server)
   - Node.js / npx (Jira MCP server)
-  - Python uv / uvx (Google Workspace MCP server)
 
 ─────────────────────────────────────────────────────────────────────────────
 STEP 1 — Create ~/.claude/.mcp.json with your credentials inline
@@ -43,35 +42,11 @@ Credentials go directly in the env blocks — no separate settings.json entry ne
         "JIRA_API_TOKEN": "..."
       }
     },
-    "slack": {
-      "type": "stdio",
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-e", "SLACK_MCP_XOXC_TOKEN", "-e", "SLACK_MCP_XOXD_TOKEN", "ghcr.io/korotovsky/slack-mcp-server:latest"],
-      "env": {
-        "SLACK_MCP_XOXC_TOKEN": "xoxc-...",
-        "SLACK_MCP_XOXD_TOKEN": "xoxd-..."
-      }
-    },
-    "google": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["workspace-mcp", "--read-only"],
-      "env": {
-        "GOOGLE_OAUTH_CLIENT_ID": "....apps.googleusercontent.com",
-        "GOOGLE_OAUTH_CLIENT_SECRET": "GOCSPX-..."
-      }
-    }
   }
 }
 
   GitHub token scopes: repo (read), read:org
   Jira API token: https://id.atlassian.com/manage-profile/security/api-tokens
-  Slack tokens (no admin approval — browser session tokens, re-extract when session expires):
-    SLACK_MCP_XOXC_TOKEN → Slack web app DevTools → localStorage key "localConfig_v2" (xoxc-...)
-    SLACK_MCP_XOXD_TOKEN → Slack web app DevTools → Application → Cookies → "d" (xoxd-...)
-  Google OAuth: create an OAuth 2.0 Desktop client in Google Cloud Console.
-    On first run the MCP server opens a browser for consent; tokens cached at
-    ~/.config/workspace-mcp/ and reused automatically.
 
 ─────────────────────────────────────────────────────────────────────────────
 STEP 2 — Create .claude/settings.json alongside the command
@@ -91,16 +66,14 @@ Place this file at <project>/.claude/settings.json (next to the commands/ dir):
       "WebSearch",
       "WebFetch",
       "mcp__github__*",
-      "mcp__jira__*",
-      "mcp__slack__*",
-      "mcp__google__*"
+      "mcp__jira__*"
     ]
   }
 }
 
 These allow the skill to call the gh CLI, git read commands, python3 (for
-JSON parsing), web tools, and all four MCP servers (GitHub, Jira, Slack,
-Google Workspace) — all without permission prompts mid-execution.
+JSON parsing), web tools, and both MCP servers (GitHub, Jira) — all without
+permission prompts mid-execution.
 
 ─────────────────────────────────────────────────────────────────────────────
 STEP 3 — Place this file at ~/.claude/commands/daily-status-report.md
@@ -139,15 +112,6 @@ If certain tools are unreachable, note them explicitly at the end of the report.
 - **Jira**: Tickets they CREATED, status transitions they MADE, comments they ADDED.
   Note transition dates when a ticket changed status during the period.
 
-- **Slack**: Messages they SENT in **public channels or work threads only**.
-  Skip personal DMs (logistics, scheduling, social chat — e.g. "running late", "sounds good").
-  Only include Slack content that reflects a work decision, technical answer, or project update.
-
-- **Google Calendar**: Meetings they ATTENDED or ORGANIZED (work meetings only).
-
-- **Google Drive / Docs**: Documents they CREATED or EDITED (include link and activity type).
-
-- **Gmail**: Emails they SENT or REPLIED to (subject and action type only — no body content).
 
 ---
 
@@ -173,8 +137,8 @@ If certain tools are unreachable, note them explicitly at the end of the report.
    For Jira, read the ticket description, comments, and any status transitions made.
 
 6. **Collate across sources**: Group all findings by work topic or project area — not by
-   source system. A single project may have GitHub commits, Jira tickets, Slack decisions,
-   documents, and emails that all belong together.
+   source system. A single project may have GitHub commits, Jira tickets, and Jira comments
+   that all belong together.
 
 7. **Handle zero activity**: If no authored activity is found across all tools for the
    resolved date range, output:
@@ -188,7 +152,7 @@ If certain tools are unreachable, note them explicitly at the end of the report.
 ## What you should do:
 Analyze the collected data and:
 1. Group all activities by project or feature area.
-2. Consolidate related work (PRs, commits, reviews, issues, discussions, docs, emails) under unified project headings.
+2. Consolidate related work (PRs, commits, reviews, issues, discussions) under unified project headings.
 3. Generate a concise status report with no more than 5 bullet points total.
 4. Highlight:
    - Completed or progressed work
@@ -196,7 +160,6 @@ Analyze the collected data and:
    - Blockers or dependencies (clearly marked)
    - Waiting-on-others situations
 5. Identify and include next steps for each project.
-6. Include any documents created or edited with their links and activity type.
 
 ---
 
@@ -223,10 +186,9 @@ Produce a highly scannable, team-ready status update that improves visibility, c
 - Write in first person ("I shipped...", "I resolved...", "I proposed...")
 - Be specific: name the PR, ticket, decision, or outcome — not just titles.
 - Include time-to-merge for merged PRs (e.g. "merged in 2h", "merged next day").
-- Do NOT report social/logistical Slack messages (scheduling, reactions, "thanks", "sounds good")
 - Do NOT report items the user did not author
 - Do NOT invent information not present in tool results
-- Do NOT include raw credentials, tokens, or email body content
+- Do NOT include raw credentials or tokens
 - Use inline references with links (e.g. [PR #123](url), [JIRA-456](url))
 - Keep it concise and dense (standup-friendly)
 - Avoid redundancy by merging related activities
