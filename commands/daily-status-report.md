@@ -170,7 +170,7 @@ Produce a highly scannable, team-ready status update that improves visibility, c
 
 **Date Range: [RESOLVED DATE RANGE]**
 
-1. **Status (Max 5 bullets total)**
+1. **Status (Max 5-7 bullets total)**
    - [Project Name]: Summary of work (include inline references with links, e.g. [PR #123](url), [JIRA-456](url))
      - Progress:
      - Blocked / Waiting: _(omit if none)_
